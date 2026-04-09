@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from api_to_tools.types import DetectionResult, SpecType
+from api_to_tools.types import AuthConfig, DetectionResult, SpecType
 
 WELL_KNOWN_PATHS: dict[SpecType, list[str]] = {
     "openapi": [
@@ -146,12 +146,15 @@ def _probe_graphql(base_url: str, client: httpx.Client, timeout: float) -> Detec
     return None
 
 
-def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True) -> DetectionResult:
+def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None) -> DetectionResult:
     """Discover API spec from a URL.
 
     Tries direct detection, then probes well-known paths.
+    Supports authenticated discovery via AuthConfig.
     """
-    with httpx.Client() as client:
+    from api_to_tools.auth import get_authenticated_client
+
+    with get_authenticated_client(auth) as client:
         # GraphQL endpoint heuristic
         if "graphql" in url or url.endswith("/gql"):
             result = _probe_graphql(url.rstrip("/"), client, timeout)

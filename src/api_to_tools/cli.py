@@ -7,15 +7,62 @@ import json
 import sys
 
 from api_to_tools.core import discover
+from api_to_tools.types import AuthConfig
 from api_to_tools.adapters.formats import to_function_calling, to_anthropic_tools
 from api_to_tools.utils import summarize, search_tools
+
+
+def _build_auth(args) -> AuthConfig | None:
+    """Build AuthConfig from CLI arguments."""
+    if hasattr(args, "bearer") and args.bearer:
+        return AuthConfig(type="bearer", token=args.bearer)
+    if hasattr(args, "basic") and args.basic:
+        parts = args.basic.split(":", 1)
+        return AuthConfig(type="basic", username=parts[0], password=parts[1] if len(parts) > 1 else "")
+    if hasattr(args, "api_key") and args.api_key:
+        parts = args.api_key.split("=", 1)
+        return AuthConfig(type="api_key", key=parts[0], value=parts[1] if len(parts) > 1 else "")
+    if hasattr(args, "cookie") and args.cookie:
+        cookies = {}
+        for c in args.cookie:
+            k, _, v = c.partition("=")
+            cookies[k] = v
+        return AuthConfig(type="cookie", cookies=cookies)
+    if hasattr(args, "login") and args.login:
+        return AuthConfig(
+            type="cookie",
+            login_url=args.login,
+            username=args.login_user or "",
+            password=args.login_pass or "",
+        )
+    if hasattr(args, "header") and args.header:
+        headers = {}
+        for h in args.header:
+            k, _, v = h.partition(":")
+            headers[k.strip()] = v.strip()
+        return AuthConfig(type="custom", headers=headers)
+    return None
+
+
+def _add_auth_args(parser: argparse.ArgumentParser):
+    """Add common auth arguments to a subparser."""
+    auth = parser.add_argument_group("authentication")
+    auth.add_argument("--bearer", metavar="TOKEN", help="Bearer token")
+    auth.add_argument("--basic", metavar="USER:PASS", help="Basic auth credentials")
+    auth.add_argument("--api-key", metavar="KEY=VALUE", help="API key (header by default)")
+    auth.add_argument("--cookie", metavar="KEY=VALUE", action="append", help="Cookie (repeatable)")
+    auth.add_argument("--header", metavar="KEY:VALUE", action="append", help="Custom header (repeatable)")
+    auth.add_argument("--login", metavar="URL", help="Login form URL (cookie auth)")
+    auth.add_argument("--login-user", metavar="USER", help="Login username")
+    auth.add_argument("--login-pass", metavar="PASS", help="Login password")
 
 
 def cmd_serve(args):
     from api_to_tools.adapters.mcp_adapter import create_mcp_server
 
+    auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url)
+    tools = discover(args.url, auth=auth)
     print(f"Found {len(tools)} tools. Starting MCP server '{args.name}'...", file=sys.stderr)
     for t in tools:
         print(f"  - {t.name}", file=sys.stderr)
@@ -25,7 +72,8 @@ def cmd_serve(args):
 
 
 def cmd_list(args):
-    tools = discover(args.url)
+    auth = _build_auth(args)
+    tools = discover(args.url, auth=auth)
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]
@@ -46,8 +94,9 @@ def cmd_list(args):
 
 
 def cmd_info(args):
+    auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url)
+    tools = discover(args.url, auth=auth)
     summary = summarize(tools)
 
     print(f"Total tools: {summary['total']}\n")
@@ -69,7 +118,8 @@ def cmd_info(args):
 
 
 def cmd_export(args):
-    tools = discover(args.url)
+    auth = _build_auth(args)
+    tools = discover(args.url, auth=auth)
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]
@@ -98,6 +148,7 @@ def main():
     p_serve = sub.add_parser("serve", help="Start MCP server (stdio)")
     p_serve.add_argument("url", help="API spec URL or website URL")
     p_serve.add_argument("--name", default="api-to-tools", help="MCP server name")
+    _add_auth_args(p_serve)
 
     # list
     p_list = sub.add_parser("list", help="List discovered tools")
@@ -105,10 +156,12 @@ def main():
     p_list.add_argument("--tag", help="Filter by tag")
     p_list.add_argument("--method", help="Filter by HTTP method")
     p_list.add_argument("--search", help="Search by name/description")
+    _add_auth_args(p_list)
 
     # info
     p_info = sub.add_parser("info", help="Show API summary")
     p_info.add_argument("url")
+    _add_auth_args(p_info)
 
     # export
     p_export = sub.add_parser("export", help="Export tool definitions")
@@ -116,6 +169,7 @@ def main():
     p_export.add_argument("--format", choices=["openai", "anthropic", "json"], default="json")
     p_export.add_argument("--tag", help="Filter by tag")
     p_export.add_argument("--search", help="Search filter")
+    _add_auth_args(p_export)
 
     args = parser.parse_args()
 

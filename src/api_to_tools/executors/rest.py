@@ -7,11 +7,13 @@ import json
 import httpx
 import xmltodict
 
-from api_to_tools.types import Tool, ExecutionResult
+from api_to_tools.types import AuthConfig, Tool, ExecutionResult
 
 
-def execute_rest(tool: Tool, args: dict) -> ExecutionResult:
+def execute_rest(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> ExecutionResult:
     """Execute a REST API call."""
+    from api_to_tools.auth import build_auth_headers, build_auth_params, build_auth_cookies, resolve_auth
+
     url = tool.endpoint
 
     # Path params
@@ -41,12 +43,21 @@ def execute_rest(tool: Tool, args: dict) -> ExecutionResult:
         headers.setdefault("Content-Type", "application/json")
     headers.setdefault("Accept", "application/json")
 
+    # Apply auth
+    cookies = {}
+    if auth:
+        resolved = resolve_auth(auth)
+        headers.update(build_auth_headers(resolved))
+        query_params.update(build_auth_params(resolved))
+        cookies = build_auth_cookies(resolved)
+
     with httpx.Client() as client:
         response = client.request(
             method=tool.method,
             url=url,
             params=query_params or None,
             headers=headers,
+            cookies=cookies or None,
             json=body if body and isinstance(body, (dict, list)) else None,
             content=str(body) if body and not isinstance(body, (dict, list)) else None,
             follow_redirects=True,

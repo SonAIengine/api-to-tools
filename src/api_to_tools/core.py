@@ -2,25 +2,42 @@
 
 from __future__ import annotations
 
-from api_to_tools.types import Tool, DetectionResult, ExecutionResult
+from api_to_tools.types import Tool, AuthConfig, DetectionResult, ExecutionResult
 from api_to_tools.detector import detect
 from api_to_tools.parsers import get_parser
 from api_to_tools.executors import get_executor
 
 
-def discover(url: str, **kwargs) -> list[Tool]:
+def discover(url: str, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool]:
     """Discover and parse API spec from a URL into tools.
 
-    >>> tools = discover("https://date.nager.at/openapi/v3.json")
-    >>> tools = discover("https://petstore.swagger.io")  # auto-detects
+    Args:
+        url: API spec URL or website URL
+        auth: Authentication config for accessing protected APIs
+
+    Examples:
+        # Public API
+        tools = discover("https://date.nager.at/openapi/v3.json")
+
+        # Basic Auth protected Swagger
+        tools = discover("https://internal.example.com/swagger.json",
+                         auth=AuthConfig(type="basic", username="admin", password="secret"))
+
+        # Bearer token
+        tools = discover("https://api.example.com",
+                         auth=AuthConfig(type="bearer", token="eyJ..."))
+
+        # Login form → discover all APIs
+        tools = discover("https://app.example.com",
+                         auth=AuthConfig(type="cookie", login_url="https://app.example.com/login",
+                                         username="user@email.com", password="pass"))
     """
-    # Separate detect options from filter options
     detect_kwargs = {k: kwargs[k] for k in ("timeout", "probe_paths") if k in kwargs}
-    detection = detect(url, **detect_kwargs)
-    return to_tools(detection, **kwargs)
+    detection = detect(url, auth=auth, **detect_kwargs)
+    return to_tools(detection, auth=auth, **kwargs)
 
 
-def to_tools(detection: DetectionResult, **kwargs) -> list[Tool]:
+def to_tools(detection: DetectionResult, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool]:
     """Parse a detected spec into tools."""
     parser = get_parser(detection.type)
     # WSDL/GraphQL need the URL, not raw content (libraries fetch themselves)
@@ -29,6 +46,13 @@ def to_tools(detection: DetectionResult, **kwargs) -> list[Tool]:
     else:
         input_data = detection.raw_content or detection.spec_url
     tools = parser(input_data, source_url=detection.spec_url)
+
+    # Store auth in tool metadata for execution
+    if auth:
+        from dataclasses import asdict
+        auth_dict = asdict(auth)
+        for t in tools:
+            t.metadata["auth"] = auth_dict
 
     # Apply base URL override
     base_url = kwargs.get("base_url")
@@ -55,11 +79,17 @@ def to_tools(detection: DetectionResult, **kwargs) -> list[Tool]:
     return tools
 
 
-def execute(tool: Tool, args: dict) -> ExecutionResult:
+def execute(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> ExecutionResult:
     """Execute a tool with given arguments.
 
-    >>> tools = discover("https://date.nager.at/openapi/v3.json")
-    >>> result = execute(tools[0], {"countryCode": "KR"})
+    Auth is resolved in this order:
+    1. Explicit `auth` parameter
+    2. Auth stored in tool.metadata from discover()
+    3. No auth
     """
+    # Resolve auth from tool metadata if not explicitly provided
+    if not auth and "auth" in tool.metadata:
+        auth = AuthConfig(**tool.metadata["auth"])
+
     executor = get_executor(tool.protocol)
-    return executor(tool, args)
+    return executor(tool, args, auth=auth)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from api_to_tools.types import Tool, ExecutionResult
+from api_to_tools.types import AuthConfig, Tool, ExecutionResult
 
 
 def _build_query(tool: Tool, args: dict) -> str:
@@ -21,15 +21,25 @@ def _build_query(tool: Tool, args: dict) -> str:
     return f"{kind}({var_defs}) {{ {tool.name}({field_args}) {selection_set} }}"
 
 
-def execute_graphql(tool: Tool, args: dict) -> ExecutionResult:
+def execute_graphql(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> ExecutionResult:
     """Execute a GraphQL query/mutation."""
+    from api_to_tools.auth import build_auth_headers, build_auth_cookies, resolve_auth
+
     query = _build_query(tool, args)
     variables = {p.name: args[p.name] for p in tool.parameters if p.name in args}
+
+    headers = {"Content-Type": "application/json"}
+    cookies = {}
+    if auth:
+        resolved = resolve_auth(auth)
+        headers.update(build_auth_headers(resolved))
+        cookies = build_auth_cookies(resolved)
 
     response = httpx.post(
         tool.endpoint,
         json={"query": query, "variables": variables},
-        headers={"Content-Type": "application/json"},
+        headers=headers,
+        cookies=cookies or None,
         timeout=30,
     )
 
