@@ -70,6 +70,27 @@ def _build_selection_set(gql_type, depth: int = 0, max_depth: int = 2) -> str | 
     return "{ " + " ".join(selections) + " }"
 
 
+def _extract_response_fields(gql_type) -> dict | None:
+    """Extract top-level response field names and types from a GraphQL return type."""
+    current = gql_type
+    if is_non_null_type(current):
+        current = current.of_type
+    if is_list_type(current):
+        current = current.of_type
+    if is_non_null_type(current):
+        current = current.of_type
+
+    if not is_object_type(current):
+        return None
+
+    fields = {}
+    for fname, ffield in current.fields.items():
+        type_name, _, _ = _unwrap_type(ffield.type)
+        fields[fname] = type_name
+
+    return fields if fields else None
+
+
 def _field_to_tool(field, kind: str, endpoint: str, field_name: str = "") -> Tool:
     params = []
     for arg_name, arg in field.args.items():
@@ -87,6 +108,11 @@ def _field_to_tool(field, kind: str, endpoint: str, field_name: str = "") -> Too
     metadata = {"return_type": str(field.type)}
     if selection_set:
         metadata["selection_set"] = selection_set
+
+    # Build response_schema from return type fields
+    response_schema = _extract_response_fields(field.type)
+    if response_schema:
+        metadata["response_schema"] = response_schema
 
     return Tool(
         name=name,

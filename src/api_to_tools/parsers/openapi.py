@@ -150,36 +150,75 @@ def _extract_params(operation: dict, root: dict) -> list[ToolParameter]:
     """Extract all parameters from an operation (path/query/header/body)."""
     params: list[ToolParameter] = []
 
-    # Path/query/header parameters
+    # Path/query/header/body parameters
     for p in operation.get("parameters", []):
         if not isinstance(p, dict):
             continue
-        # Resolve parameter $ref
         if "$ref" in p:
             p = _resolve_schema(p, root)
         if "name" not in p:
             continue
 
+        param_in = p.get("in", "")
+
+        # --- Swagger 2.0: in="body" parameter ---
+        if param_in == "body":
+            body_schema = p.get("schema", {})
+            if isinstance(body_schema, dict) and "$ref" in body_schema:
+                body_schema = _resolve_schema(body_schema, root)
+            elif isinstance(body_schema, dict):
+                body_schema = _resolve_schema(body_schema, root)
+            body_params = _schema_to_params(body_schema, location="body")
+            if body_params:
+                params.extend(body_params)
+            elif body_schema:
+                params.append(ToolParameter(
+                    name=p["name"],
+                    type=_schema_type_str(body_schema),
+                    required=p.get("required", False),
+                    location="body",
+                    description=p.get("description"),
+                    schema=body_schema if body_schema.get("properties") else None,
+                ))
+            continue
+
+        # --- Normal parameters (path/query/header/cookie) ---
         schema = p.get("schema", {})
         if isinstance(schema, dict) and "$ref" in schema:
             schema = _resolve_schema(schema, root)
 
         desc = p.get("description", "")
-        example = p.get("example")
+        # Example from parameter level or schema level
+        example = p.get("example") or p.get("x-example")
+        if example is None and isinstance(schema, dict):
+            example = schema.get("example") or schema.get("default")
         if example is not None:
             desc = f"{desc} (example: {example})" if desc else f"example: {example}"
 
+        # Enum: check both parameter level (Swagger 2.0) and schema level (OpenAPI 3.x)
+        enum_values = None
+        if isinstance(schema, dict) and schema.get("enum"):
+            enum_values = schema["enum"]
+        elif p.get("enum"):
+            enum_values = p["enum"]
+
+        # Type: Swagger 2.0 puts type at parameter level, 3.x in schema
+        param_type = (
+            (_schema_type_str(schema) if isinstance(schema, dict) and schema.get("type") else None)
+            or p.get("type", "string")
+        )
+
         params.append(ToolParameter(
             name=p["name"],
-            type=_schema_type_str(schema) if isinstance(schema, dict) else p.get("type", "string"),
-            required=p.get("required", p.get("in") == "path"),
-            location=p.get("in"),
+            type=param_type,
+            required=p.get("required", param_in == "path"),
+            location=param_in or None,
             description=desc or None,
-            enum=schema.get("enum") if isinstance(schema, dict) else p.get("enum"),
-            default=schema.get("default") if isinstance(schema, dict) else None,
+            enum=enum_values,
+            default=schema.get("default") if isinstance(schema, dict) else p.get("default"),
         ))
 
-    # Request body (OpenAPI 3.x)
+    # --- Request body (OpenAPI 3.x) ---
     request_body = operation.get("requestBody", {})
     if isinstance(request_body, dict) and "$ref" in request_body:
         request_body = _resolve_schema(request_body, root)
@@ -200,7 +239,6 @@ def _extract_params(operation: dict, root: dict) -> list[ToolParameter]:
         if body_params:
             params.extend(body_params)
         elif resolved_body.get("type"):
-            # Opaque body (no properties extracted)
             params.append(ToolParameter(
                 name="body",
                 type=_schema_type_str(resolved_body),
@@ -218,7 +256,10 @@ def _extract_params(operation: dict, root: dict) -> list[ToolParameter]:
 # ──────────────────────────────────────────────
 
 def _extract_response_schema(responses: dict, root: dict) -> dict | None:
-    """Extract the success response schema as a JSON Schema dict."""
+    """Extract the success response schema as a JSON Schema dict.
+
+    Handles both OpenAPI 3.x (content.*.schema) and Swagger 2.0 (schema directly).
+    """
     if not isinstance(responses, dict):
         return None
 
@@ -226,13 +267,19 @@ def _extract_response_schema(responses: dict, root: dict) -> dict | None:
     if not isinstance(success, dict):
         return None
 
-    content = success.get("content", {})
-    if not content:
-        return None
+    schema = None
 
-    media = next(iter(content.values()), {})
-    schema = media.get("schema", {}) if isinstance(media, dict) else {}
-    if not schema:
+    # OpenAPI 3.x: responses.200.content.*.schema
+    content = success.get("content", {})
+    if content:
+        media = next(iter(content.values()), {})
+        schema = media.get("schema", {}) if isinstance(media, dict) else {}
+
+    # Swagger 2.0: responses.200.schema (directly on the response)
+    if not schema and "schema" in success:
+        schema = success["schema"]
+
+    if not schema or not isinstance(schema, dict):
         return None
 
     resolved = _resolve_schema(schema, root, max_depth=3)
