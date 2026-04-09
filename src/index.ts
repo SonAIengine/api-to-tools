@@ -10,6 +10,8 @@ export type * from './types.js';
 export { detect } from './detector/index.js';
 export { getParser } from './parsers/index.js';
 export { getExecutor } from './executors/index.js';
+export { createMcpServer } from './adapters/index.js';
+export type { McpServerOptions } from './adapters/index.js';
 
 /**
  * Discover and parse API spec from a URL into tools.
