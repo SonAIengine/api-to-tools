@@ -1,0 +1,405 @@
+"""Dynamic browser-based API crawler using Playwright.
+
+This parser actually runs a headless browser to:
+1. Load the target website
+2. Perform login (if credentials provided)
+3. Navigate all discoverable pages (links, menu items, menu API responses)
+4. Capture all XHR/fetch network requests
+5. Extract API endpoints from actual live traffic
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from urllib.parse import parse_qs, urljoin, urlparse
+
+from api_to_tools.types import AuthConfig, Tool, ToolParameter
+
+
+def _is_api_request(url: str) -> bool:
+    """Determine if a URL looks like an API call."""
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+
+    static_exts = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+                   ".ico", ".woff", ".woff2", ".ttf", ".map", ".html", ".mp4", ".webp")
+    if any(path.endswith(ext) for ext in static_exts):
+        return False
+    if "/_next/" in path or "/__nextjs" in path:
+        return False
+
+    return (
+        "/api/" in path
+        or "/v1/" in path or "/v2/" in path or "/v3/" in path
+        or "/rest/" in path
+        or "/graphql" in path
+        or "/rpc/" in path
+    )
+
+
+def _infer_json_type(value) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "string"
+
+
+def _extract_tag(path: str) -> str:
+    """Extract meaningful tag from API path, skipping api/v1/v2/bo etc."""
+    segments = [s for s in path.split("/") if s]
+    # Skip common prefixes
+    skip = {"api", "bo", "v1", "v2", "v3", "rest", "admin"}
+    for seg in segments:
+        if seg.lower() not in skip:
+            return seg
+    return segments[0] if segments else "api"
+
+
+def _build_tool_from_request(request, seen: set) -> Tool | None:
+    """Convert a captured network request into a Tool."""
+    url = request.url
+    method = request.method
+
+    if not _is_api_request(url):
+        return None
+
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/") or "/"
+    # Normalize path params
+    normalized_path = re.sub(r'/\d+(/|$)', r'/{id}\1', path)
+    normalized_path = re.sub(
+        r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(/|$)',
+        r'/{uuid}\1',
+        normalized_path,
+    )
+
+    key = (method, f"{parsed.netloc}{normalized_path}")
+    if key in seen:
+        return None
+    seen.add(key)
+
+    # Query params
+    query_params: list[ToolParameter] = []
+    if parsed.query:
+        for name in parse_qs(parsed.query):
+            query_params.append(ToolParameter(
+                name=name, type="string", required=False, location="query",
+            ))
+
+    # Path params
+    path_params: list[ToolParameter] = []
+    for m in re.finditer(r'\{(\w+)\}', normalized_path):
+        path_params.append(ToolParameter(
+            name=m.group(1), type="string", required=True, location="path",
+        ))
+
+    # Body params
+    body_params: list[ToolParameter] = []
+    try:
+        post_data = request.post_data
+    except Exception:
+        post_data = None
+
+    if post_data and method in ("POST", "PUT", "PATCH"):
+        try:
+            body_json = json.loads(post_data)
+            if isinstance(body_json, dict):
+                for name, value in body_json.items():
+                    body_params.append(ToolParameter(
+                        name=name, type=_infer_json_type(value),
+                        required=False, location="body",
+                    ))
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Name from last path segment
+    segs = [s for s in normalized_path.split("/") if s and s not in ("api", "bo", "v1", "v2", "v3")]
+    name = segs[-1] if segs else "request"
+    name = re.sub(r'[^a-zA-Z0-9_]', '_', name).strip("_")
+
+    endpoint = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
+
+    return Tool(
+        name=f"{method.lower()}_{name}",
+        description=f"{method} {normalized_path}",
+        parameters=path_params + query_params + body_params,
+        endpoint=endpoint,
+        method=method,
+        protocol="rest",
+        response_format="json",
+        tags=[_extract_tag(normalized_path)],
+        metadata={"source": "crawler", "raw_url": url},
+    )
+
+
+def crawl_site(
+    url: str,
+    *,
+    auth: AuthConfig | None = None,
+    max_pages: int = 50,
+    timeout: float = 30.0,
+    headless: bool = True,
+    wait_time: float = 2.0,
+) -> list[Tool]:
+    """Crawl a website with a real browser to discover API endpoints.
+
+    1. Navigate to URL
+    2. Log in (if credentials provided)
+    3. Extract all routes (from href links + menu API responses + buildManifest)
+    4. Visit each route, capturing all network requests
+    5. Return discovered API tools
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise ImportError(
+            "Playwright is not installed. Install with:\n"
+            "  pip install playwright\n"
+            "  python -m playwright install chromium"
+        ) from e
+
+    captured_requests: list = []
+    menu_routes: list[str] = []
+
+    def _handle_request(req):
+        captured_requests.append(req)
+
+    def _handle_response(response):
+        """Parse menu-list-like API responses to find routes to visit."""
+        try:
+            url_lower = response.url.lower()
+            if not any(kw in url_lower for kw in ("menu", "route", "navigation", "sitemap")):
+                return
+            if response.status != 200:
+                return
+            ct = response.headers.get("content-type", "")
+            if "json" not in ct:
+                return
+            body = response.json()
+            # Recursively find URL-like fields in menu responses
+            url_keys = {"url", "path", "route", "menuurl", "pageurl", "link",
+                        "menupath", "callurl", "href", "to", "pageroute"}
+
+            def extract_urls(obj):
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if k.lower() in url_keys and isinstance(v, str) and v:
+                            # Accept both /absolute and relative paths
+                            if v.startswith("//") or v.startswith("http"):
+                                continue
+                            if v.startswith("javascript:") or v == "#":
+                                continue
+                            menu_routes.append(v)
+                        elif isinstance(v, (dict, list)):
+                            extract_urls(v)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        extract_urls(item)
+            extract_urls(body)
+        except Exception:
+            pass
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        context = browser.new_context(ignore_https_errors=True)
+        page = context.new_page()
+
+        page.on("request", _handle_request)
+        page.on("response", _handle_response)
+
+        # 1. Initial load
+        try:
+            page.goto(url, timeout=int(timeout * 1000), wait_until="networkidle")
+        except Exception:
+            try:
+                page.goto(url, timeout=int(timeout * 1000))
+            except Exception:
+                browser.close()
+                raise
+
+        page.wait_for_timeout(int(wait_time * 1000))
+
+        # 2. Login
+        if auth and auth.username and auth.password:
+            _attempt_login(page, auth, wait_time)
+
+        # 3. Wait for initial dashboard to load (menu API calls happen here)
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        page.wait_for_timeout(int(wait_time * 1000))
+
+        # 4. Gather routes to visit
+        parsed_base = urlparse(url)
+        base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        routes_to_visit = list(dict.fromkeys(menu_routes))  # routes from menu API
+        href_links = _collect_href_links(page, base_origin)
+        for link in href_links:
+            if link not in routes_to_visit:
+                routes_to_visit.append(link)
+
+        # Limit and visit each route
+        visited = set()
+        for idx, route in enumerate(routes_to_visit):
+            if len(visited) >= max_pages:
+                break
+            # Normalize to full URL
+            if route.startswith("http"):
+                full = route
+            elif route.startswith("/"):
+                full = f"{base_origin}{route}"
+            else:
+                # Relative path (e.g., "member/member-mgmt/...")
+                full = f"{base_origin}/{route.lstrip('/')}"
+
+            if full in visited:
+                continue
+            visited.add(full)
+
+            try:
+                page.goto(full, timeout=int(timeout * 1000), wait_until="domcontentloaded")
+                page.wait_for_timeout(int(wait_time * 1000))
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
+        # 5. Also try clicking sidebar menu items for SPAs without href
+        _click_menu_items(page, base_origin, max_pages, wait_time, visited)
+
+        browser.close()
+
+    # Convert captured requests
+    tools: list[Tool] = []
+    seen: set = set()
+    for req in captured_requests:
+        tool = _build_tool_from_request(req, seen)
+        if tool:
+            tools.append(tool)
+
+    return tools
+
+
+def _attempt_login(page, auth: AuthConfig, wait_time: float) -> None:
+    """Fill and submit a login form."""
+    username_selectors = [
+        'input[name="loginId"]', 'input[name="username"]', 'input[name="email"]',
+        'input[name="user"]', 'input[name="id"]', 'input[type="email"]',
+        'input[id*="login" i]', 'input[id*="user" i]',
+    ]
+    password_selectors = [
+        'input[name="password"]', 'input[name="passwd"]', 'input[name="pwd"]',
+        'input[type="password"]',
+    ]
+    submit_selectors = [
+        'button[type="submit"]', 'input[type="submit"]',
+        'button:has-text("로그인")', 'button:has-text("Login")',
+        'button:has-text("Sign in")', 'button:has-text("Sign In")',
+    ]
+
+    for sel in username_selectors:
+        try:
+            if page.locator(sel).count() > 0:
+                page.locator(sel).first.fill(auth.username or "")
+                break
+        except Exception:
+            continue
+
+    for sel in password_selectors:
+        try:
+            if page.locator(sel).count() > 0:
+                page.locator(sel).first.fill(auth.password or "")
+                break
+        except Exception:
+            continue
+
+    for sel in submit_selectors:
+        try:
+            if page.locator(sel).count() > 0:
+                page.locator(sel).first.click()
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(int(wait_time * 1000))
+                return
+        except Exception:
+            continue
+
+
+def _collect_href_links(page, base_origin: str) -> list[str]:
+    """Collect internal href links from current page."""
+    try:
+        hrefs = page.eval_on_selector_all(
+            "a[href]",
+            "els => els.map(e => e.href)",
+        )
+    except Exception:
+        return []
+
+    base_host = urlparse(base_origin).netloc
+    result = []
+    for href in hrefs:
+        if not href:
+            continue
+        parsed = urlparse(href)
+        if parsed.netloc and parsed.netloc != base_host:
+            continue
+        if href.startswith("javascript:") or href.startswith("#"):
+            continue
+        if parsed.scheme not in ("", "http", "https"):
+            continue
+        clean = urljoin(base_origin, href).split("#")[0]
+        if clean not in result:
+            result.append(clean)
+    return result
+
+
+def _click_menu_items(page, base_origin: str, max_clicks: int, wait_time: float, visited: set) -> None:
+    """Click on sidebar/menu items to navigate SPAs."""
+    menu_selectors = [
+        'nav a', 'nav button', 'aside a', 'aside button',
+        '[role="navigation"] a', '[role="navigation"] button',
+        '[class*="sidebar" i] a', '[class*="sidebar" i] button',
+        '[class*="menu" i] a', '[class*="menu" i] button',
+        '[class*="nav" i] a', '[class*="nav" i] button',
+        'li[role="menuitem"]',
+    ]
+
+    clicked = 0
+    for sel in menu_selectors:
+        if clicked >= max_clicks:
+            break
+        try:
+            count = page.locator(sel).count()
+        except Exception:
+            continue
+
+        for i in range(min(count, max_clicks - clicked)):
+            try:
+                element = page.locator(sel).nth(i)
+                # Check if visible and enabled
+                if not element.is_visible(timeout=500):
+                    continue
+                before = page.url
+                element.click(timeout=2000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=3000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(int(wait_time * 500))
+                clicked += 1
+                visited.add(page.url)
+            except Exception:
+                continue

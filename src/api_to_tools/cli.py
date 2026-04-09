@@ -12,6 +12,18 @@ from api_to_tools.adapters.formats import to_function_calling, to_anthropic_tool
 from api_to_tools.utils import summarize, search_tools
 
 
+def _discover_kwargs(args) -> dict:
+    """Extract discovery kwargs from CLI args."""
+    kw = {}
+    if getattr(args, "scan_js", False):
+        kw["scan_js"] = True
+    if getattr(args, "crawl", False):
+        kw["crawl"] = True
+        kw["max_pages"] = getattr(args, "max_pages", 50)
+        kw["headless"] = not getattr(args, "headed", False)
+    return kw
+
+
 def _build_auth(args) -> AuthConfig | None:
     """Build AuthConfig from CLI arguments."""
     if hasattr(args, "bearer") and args.bearer:
@@ -48,6 +60,12 @@ def _add_auth_args(parser: argparse.ArgumentParser):
     """Add common auth and discovery arguments to a subparser."""
     parser.add_argument("--scan-js", action="store_true",
                         help="Scan JS bundles to discover APIs (for sites without OpenAPI spec)")
+    parser.add_argument("--crawl", action="store_true",
+                        help="Use headless browser to crawl site and capture all API calls (recommended for SPAs)")
+    parser.add_argument("--max-pages", type=int, default=50,
+                        help="Max pages to crawl (default: 50)")
+    parser.add_argument("--headed", action="store_true",
+                        help="Show browser window (non-headless) for debugging")
     auth = parser.add_argument_group("authentication")
     auth.add_argument("--bearer", metavar="TOKEN", help="Bearer token")
     auth.add_argument("--basic", metavar="USER:PASS", help="Basic auth credentials")
@@ -64,7 +82,7 @@ def cmd_serve(args):
 
     auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
+    tools = discover(args.url, auth=auth, **_discover_kwargs(args))
     print(f"Found {len(tools)} tools. Starting MCP server '{args.name}'...", file=sys.stderr)
     for t in tools:
         print(f"  - {t.name}", file=sys.stderr)
@@ -75,7 +93,7 @@ def cmd_serve(args):
 
 def cmd_list(args):
     auth = _build_auth(args)
-    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
+    tools = discover(args.url, auth=auth, **_discover_kwargs(args))
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]
@@ -98,7 +116,7 @@ def cmd_list(args):
 def cmd_info(args):
     auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
+    tools = discover(args.url, auth=auth, **_discover_kwargs(args))
     summary = summarize(tools)
 
     print(f"Total tools: {summary['total']}\n")
@@ -121,7 +139,7 @@ def cmd_info(args):
 
 def cmd_export(args):
     auth = _build_auth(args)
-    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
+    tools = discover(args.url, auth=auth, **_discover_kwargs(args))
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]
