@@ -169,13 +169,17 @@ async def _fetch_all(urls: list[str], headers: dict[str, str], timeout: float) -
 # 3. Context-aware regex scanner (the core)
 # ──────────────────────────────────────────────
 
-# Match either a quoted string literal or a template literal containing /api/
-# Captures: quote, content
-_API_PATH_RE = re.compile(
-    r'(["\'`])'
-    r'(\/(?:api|v\d+|rest|graphql|rpc)\/[^\1\s\n]{1,300}?)'
-    r'\1'
-)
+# Match API paths inside string/template literals.
+# We run three separate patterns because character classes can't use
+# back-references to the opening quote in Python's re module.
+_API_PATH_PATTERNS = [
+    # Double-quoted: "/api/..."
+    re.compile(r'"(/(?:api|v\d+|rest|graphql|rpc)/[^"\s\n<>]{1,300})"'),
+    # Single-quoted: '/api/...'
+    re.compile(r"'(/(?:api|v\d+|rest|graphql|rpc)/[^'\s\n<>]{1,300})'"),
+    # Template literal: `/api/...`
+    re.compile(r'`(/(?:api|v\d+|rest|graphql|rpc)/[^`\s\n<>]{1,300})`'),
+]
 
 # Method-hint lookups (walk BACKWARDS from a URL literal)
 _METHOD_BEFORE_RE = re.compile(
@@ -273,32 +277,30 @@ def extract_api_calls_from_js(js_source: str) -> list[dict]:
     """
     found: list[dict] = []
 
-    for match in _API_PATH_RE.finditer(js_source):
-        raw_path = match.group(2)
-        path = _normalize_template_expressions(raw_path)
+    for pattern in _API_PATH_PATTERNS:
+        for match in pattern.finditer(js_source):
+            raw_path = match.group(1)
+            path = _normalize_template_expressions(raw_path)
 
-        if not _looks_like_api_path(path):
-            continue
+            if not _looks_like_api_path(path):
+                continue
 
-        # Find method: walk back to look for .get( / .post( / fetch(
-        method, is_fetch = _walk_back_for_method(js_source, match.start(), limit=80)
+            method, is_fetch = _walk_back_for_method(js_source, match.start(), limit=80)
 
-        # Walk forward for body object + potential method override
-        method_override, body_params = _walk_forward_for_body(
-            js_source, match.end(), limit=600
-        )
-        if method_override:
-            method = method_override
+            method_override, body_params = _walk_forward_for_body(
+                js_source, match.end(), limit=600
+            )
+            if method_override:
+                method = method_override
 
-        if not method:
-            # Keep fetch with GET default; otherwise infer from path name
-            method = _infer_method_from_path(path)
+            if not method:
+                method = _infer_method_from_path(path)
 
-        found.append({
-            "method": method,
-            "url": path,
-            "body_params": body_params,
-        })
+            found.append({
+                "method": method,
+                "url": path,
+                "body_params": body_params,
+            })
 
     return found
 
@@ -337,20 +339,89 @@ def _collect_route_paths_from_chunks(chunk_sources: dict[str, str]) -> set[str]:
     """Scan chunks for route path strings (e.g. "/admin/users")."""
     routes: set[str] = set()
     # Route paths look like "/admin/..." or "/member/..." — NOT /api/ and NOT static
-    route_re = re.compile(r'["\'`](/[a-z][a-z0-9/_-]{3,80})["\'`]')
-    skip = {"api", "v1", "v2", "v3", "_next", "static", "chunks"}
+    route_re = re.compile(r'["\'`](/[a-z][a-z0-9/_-]{3,120})["\'`]')
+    skip = {"api", "v1", "v2", "v3", "_next", "static", "chunks", "assets"}
     for js in chunk_sources.values():
         for m in route_re.finditer(js):
             path = m.group(1)
             first_seg = path.strip("/").split("/")[0].lower()
             if first_seg in skip:
                 continue
-            if any(path.endswith(ext) for ext in (".js", ".css", ".png", ".svg", ".json", ".ico")):
+            if any(path.endswith(ext) for ext in (".js", ".css", ".png", ".svg", ".json", ".ico", ".woff", ".woff2")):
                 continue
             if "/api/" in path or "/_next/" in path:
                 continue
-            routes.add(path)
+            # Must have at least 2 segments to be a real route
+            if path.count("/") < 2:
+                continue
+            routes.add(path.rstrip("/"))
     return routes
+
+
+def _bfs_harvest_chunks(
+    start_url: str,
+    initial_chunks: set[str],
+    initial_sources: dict[str, str],
+    auth: AuthConfig | None,
+    headers: dict[str, str],
+    timeout: float,
+    max_chunks: int,
+    max_iterations: int = 5,
+) -> dict[str, str]:
+    """Breadth-first expansion: route discovery → visit → new chunks → repeat.
+
+    Keep expanding until no new chunks/routes are found or limits are hit.
+    """
+    from api_to_tools.auth import get_authenticated_client
+
+    parsed = urlparse(start_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    all_chunks: set[str] = set(initial_chunks)
+    all_sources: dict[str, str] = dict(initial_sources)
+    visited_routes: set[str] = set()
+
+    for iteration in range(max_iterations):
+        if len(all_chunks) >= max_chunks:
+            break
+
+        # 1. Extract routes from all known chunk sources
+        discovered_routes = _collect_route_paths_from_chunks(all_sources)
+        new_routes = discovered_routes - visited_routes
+        if not new_routes:
+            log.info("BFS iter %d: no new routes → stop", iteration)
+            break
+
+        log.info("BFS iter %d: %d new routes to visit", iteration, len(new_routes))
+        visited_routes.update(new_routes)
+
+        # 2. Visit each new route and collect HTML chunks
+        new_chunks: set[str] = set()
+        with get_authenticated_client(auth) as client:
+            for route in list(new_routes)[:200]:  # cap per iteration
+                rurl = f"{origin}{route}"
+                try:
+                    r = client.get(rurl, timeout=timeout, follow_redirects=True)
+                    if r.status_code == 200:
+                        found = _collect_chunks_from_html(r.text, str(r.url))
+                        new_chunks.update(found - all_chunks)
+                except httpx.HTTPError:
+                    continue
+
+        if not new_chunks:
+            log.info("BFS iter %d: no new chunks → stop", iteration)
+            break
+
+        log.info("BFS iter %d: %d new chunks discovered", iteration, len(new_chunks))
+
+        # 3. Download new chunks
+        available = max_chunks - len(all_chunks)
+        to_fetch = sorted(new_chunks)[:available]
+        fetched = asyncio.run(_fetch_all(to_fetch, headers, timeout))
+        all_sources.update(fetched)
+        all_chunks.update(fetched.keys())
+
+    return all_sources
 
 
 def discover_static_spa(
@@ -403,32 +474,17 @@ def discover_static_spa(
     chunk_sources = asyncio.run(_fetch_all(chunks_list, headers, timeout))
     log.info("Downloaded %d/%d chunks", len(chunk_sources), len(chunks_list))
 
-    # Route discovery: scan chunks for internal page routes, visit them, collect more chunks
+    # BFS route discovery: iteratively visit routes → harvest chunks → repeat
     if follow_routes and auth and auth.username and auth.password:
-        routes = _collect_route_paths_from_chunks(chunk_sources)
-        log.info("Discovered %d internal routes to visit", len(routes))
-
-        if routes:
-            parsed = urlparse(final_url)
-            origin = f"{parsed.scheme}://{parsed.netloc}"
-            # Visit each route with auth cookies to harvest new chunks
-            route_urls = [f"{origin}{r.rstrip('/')}" for r in list(routes)[:50]]
-
-            with get_authenticated_client(auth) as client:
-                for rurl in route_urls:
-                    try:
-                        r = client.get(rurl, timeout=timeout, follow_redirects=True)
-                        if r.status_code == 200:
-                            new_chunks = collect_all_chunks(r.text, str(r.url), client, timeout)
-                            all_chunks.update(new_chunks)
-                    except httpx.HTTPError:
-                        continue
-
-            new_to_fetch = sorted(all_chunks - set(chunk_sources.keys()))[: max_chunks - len(chunk_sources)]
-            if new_to_fetch:
-                log.info("Fetching %d additional chunks from routes", len(new_to_fetch))
-                extra = asyncio.run(_fetch_all(new_to_fetch, headers, timeout))
-                chunk_sources.update(extra)
+        chunk_sources = _bfs_harvest_chunks(
+            start_url=final_url,
+            initial_chunks=set(chunk_sources.keys()),
+            initial_sources=chunk_sources,
+            auth=auth,
+            headers=headers,
+            timeout=timeout,
+            max_chunks=max_chunks,
+        )
 
     log.info("Final chunk pool size: %d (downloaded)", len(chunk_sources))
 
