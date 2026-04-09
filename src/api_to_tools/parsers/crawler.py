@@ -127,17 +127,115 @@ def _build_tool_from_request(request, seen: set) -> Tool | None:
 
     endpoint = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
 
+    is_destructive = _is_mutation_request(method, url)
+    description = f"{method} {normalized_path}"
+    if is_destructive:
+        description = f"[DESTRUCTIVE] {description}"
+
     return Tool(
         name=f"{method.lower()}_{name}",
-        description=f"{method} {normalized_path}",
+        description=description,
         parameters=path_params + query_params + body_params,
         endpoint=endpoint,
         method=method,
         protocol="rest",
         response_format="json",
         tags=[_extract_tag(normalized_path)],
-        metadata={"source": "crawler", "raw_url": url},
+        metadata={
+            "source": "crawler",
+            "raw_url": url,
+            "destructive": is_destructive,
+        },
     )
+
+
+SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
+# URL keywords that hint the request is a login/auth call (allowed even in safe mode)
+AUTH_KEYWORDS = ("login", "signin", "sign-in", "auth", "token", "refresh", "logout", "signout")
+# URL last-segment keywords that indicate a read-only operation (safe even if POST)
+READ_KEYWORDS = (
+    "get", "find", "list", "search", "query", "check", "has", "is", "fetch",
+    "load", "retrieve", "view", "show", "count", "exist", "lookup", "select",
+    "read", "info", "detail", "status",
+)
+# Keywords that strongly indicate a destructive / mutating operation
+MUTATION_KEYWORDS = (
+    "delete", "remove", "destroy", "drop", "erase",
+    "create", "add", "insert", "regist", "new",
+    "update", "modify", "edit", "change", "set", "put",
+    "save", "upsert", "upload", "import",
+    "send", "publish", "submit", "issue", "execute", "run",
+    "approve", "reject", "cancel",
+)
+
+
+def _is_mutation_request(method: str, url: str) -> bool:
+    """Heuristic: does this request modify server state?
+
+    Returns True only if we're reasonably confident it's a mutation.
+    False for reads (even if sent as POST - common in RPC-style APIs).
+    """
+    if method in SAFE_HTTP_METHODS:
+        return False
+
+    url_lower = url.lower()
+    last_segment = url_lower.rstrip("/").split("/")[-1].split("?")[0]
+
+    # Auth/session endpoints are allowed even though they're POST
+    if any(kw in url_lower for kw in AUTH_KEYWORDS):
+        return False
+
+    # Read-style RPC endpoints: get*, find*, list*, search*, etc.
+    if any(last_segment.startswith(kw) for kw in READ_KEYWORDS):
+        return False
+    if any(kw in last_segment for kw in ("list", "detail", "info", "status")):
+        return False
+
+    # DELETE/PUT/PATCH are always mutations
+    if method in ("DELETE", "PUT", "PATCH"):
+        return True
+
+    # POST with mutation keywords in path
+    if any(kw in url_lower for kw in MUTATION_KEYWORDS):
+        return True
+
+    # Default for POST: treat as mutation to be safe
+    return True
+
+
+def _launch_browser(playwright, backend: str, headless: bool):
+    """Launch a browser with the specified backend.
+
+    Backends:
+      - "auto": try system Chrome first, fall back to Playwright Chromium
+      - "system": system Chrome (requires Chrome installed, no download)
+      - "playwright": Playwright-bundled Chromium
+      - "lightpanda": Connect to running Lightpanda CDP server on :9222
+    """
+    if backend in ("auto", "system"):
+        try:
+            return playwright.chromium.launch(channel="chrome", headless=headless)
+        except Exception:
+            if backend == "system":
+                raise RuntimeError(
+                    "System Chrome not found. Install Chrome or use backend='playwright'."
+                )
+            # auto: fall through to playwright
+
+    if backend in ("auto", "playwright"):
+        try:
+            return playwright.chromium.launch(headless=headless)
+        except Exception as e:
+            raise RuntimeError(
+                "Playwright Chromium not found. Install with:\n"
+                "  python -m playwright install chromium\n"
+                "Or install Chrome and use backend='system'."
+            ) from e
+
+    if backend == "lightpanda":
+        return playwright.chromium.connect_over_cdp("ws://127.0.0.1:9222/")
+
+    raise ValueError(f"Unknown backend: {backend}")
 
 
 def crawl_site(
@@ -148,26 +246,35 @@ def crawl_site(
     timeout: float = 30.0,
     headless: bool = True,
     wait_time: float = 2.0,
+    backend: str = "auto",
+    safe_mode: bool = True,
 ) -> list[Tool]:
     """Crawl a website with a real browser to discover API endpoints.
 
-    1. Navigate to URL
-    2. Log in (if credentials provided)
-    3. Extract all routes (from href links + menu API responses + buildManifest)
-    4. Visit each route, capturing all network requests
-    5. Return discovered API tools
+    Args:
+        url: Website URL to crawl
+        auth: Authentication config (AuthConfig with username/password for form login)
+        max_pages: Maximum number of pages to visit
+        timeout: Navigation timeout in seconds
+        headless: Run browser in headless mode
+        wait_time: Time to wait per page for async requests (seconds)
+        backend: Browser backend - "auto" (prefer system Chrome), "system",
+                 "playwright", or "lightpanda"
+        safe_mode: If True, intercepts non-GET requests after login so that
+                   destructive operations (POST/PUT/DELETE/PATCH) are captured
+                   but NOT sent to the server. Essential for crawling live sites.
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
         raise ImportError(
             "Playwright is not installed. Install with:\n"
-            "  pip install playwright\n"
-            "  python -m playwright install chromium"
+            "  pip install playwright"
         ) from e
 
     captured_requests: list = []
     menu_routes: list[str] = []
+    safe_mode_active = [False]  # mutable closure
 
     def _handle_request(req):
         captured_requests.append(req)
@@ -207,13 +314,33 @@ def crawl_site(
         except Exception:
             pass
 
+    def _safe_mode_route(route, request):
+        """Intercept true mutation requests after login to prevent side effects."""
+        if safe_mode_active[0] and _is_mutation_request(request.method, request.url):
+            # Blocked mutation - request is already recorded via page.on("request")
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"success": true, "_api_to_tools_blocked": true, '
+                     '"_message": "Request blocked by api-to-tools safe_mode"}',
+            )
+        else:
+            route.continue_()
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(ignore_https_errors=True)
+        browser = _launch_browser(p, backend, headless)
+        if browser.contexts:
+            context = browser.contexts[0]
+        else:
+            context = browser.new_context(ignore_https_errors=True)
         page = context.new_page()
 
         page.on("request", _handle_request)
         page.on("response", _handle_response)
+
+        # Install safe-mode route handler (applies to all requests under context)
+        if safe_mode:
+            context.route("**/*", _safe_mode_route)
 
         # 1. Initial load
         try:
@@ -237,6 +364,10 @@ def crawl_site(
         except Exception:
             pass
         page.wait_for_timeout(int(wait_time * 1000))
+
+        # Activate safe mode AFTER login so subsequent mutations are blocked
+        if safe_mode:
+            safe_mode_active[0] = True
 
         # 4. Gather routes to visit
         parsed_base = urlparse(url)

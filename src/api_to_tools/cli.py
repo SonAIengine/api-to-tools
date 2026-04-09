@@ -21,6 +21,8 @@ def _discover_kwargs(args) -> dict:
         kw["crawl"] = True
         kw["max_pages"] = getattr(args, "max_pages", 50)
         kw["headless"] = not getattr(args, "headed", False)
+        kw["backend"] = getattr(args, "backend", "auto")
+        kw["safe_mode"] = not getattr(args, "no_safe_mode", False)
     return kw
 
 
@@ -66,6 +68,12 @@ def _add_auth_args(parser: argparse.ArgumentParser):
                         help="Max pages to crawl (default: 50)")
     parser.add_argument("--headed", action="store_true",
                         help="Show browser window (non-headless) for debugging")
+    parser.add_argument("--backend", choices=["auto", "system", "playwright", "lightpanda"],
+                        default="auto",
+                        help="Browser backend: auto (system Chrome first), system, playwright, lightpanda")
+    parser.add_argument("--no-safe-mode", action="store_true",
+                        help="DISABLE safe mode (allows destructive requests to reach the server). "
+                             "Only use on non-production or read-only accounts!")
     auth = parser.add_argument_group("authentication")
     auth.add_argument("--bearer", metavar="TOKEN", help="Bearer token")
     auth.add_argument("--basic", metavar="USER:PASS", help="Basic auth credentials")

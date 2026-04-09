@@ -34,7 +34,7 @@ def discover(url: str, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool
     """
     detect_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in ("timeout", "probe_paths", "scan_js", "crawl")}
     # Pass crawler-specific options through to to_tools via kwargs
-    crawl_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in ("max_pages", "headless", "wait_time")}
+    crawl_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in ("max_pages", "headless", "wait_time", "backend", "safe_mode")}
     detection = detect(url, auth=auth, **detect_kwargs)
     return to_tools(detection, auth=auth, **{**kwargs, **crawl_kwargs})
 
@@ -45,7 +45,8 @@ def to_tools(detection: DetectionResult, *, auth: AuthConfig | None = None, **kw
 
     # Crawler: actual browser-based discovery
     if detection.type == "crawler":
-        crawler_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in ("max_pages", "headless", "wait_time", "timeout")}
+        crawler_kwargs = {k: kwargs.pop(k) for k in list(kwargs)
+                          if k in ("max_pages", "headless", "wait_time", "timeout", "backend", "safe_mode")}
         tools = parser(detection.spec_url, auth=auth, **crawler_kwargs)
     # jsbundle parser has its own fetch logic and needs auth
     elif detection.type == "jsbundle":
