@@ -2,12 +2,15 @@ import type { DetectionResult, DiscoverOptions, SpecType } from '../types.js';
 
 const WELL_KNOWN_PATHS: Record<SpecType, string[]> = {
   openapi: [
-    '/openapi.json', '/openapi.yaml',
+    '/openapi.json', '/openapi.yaml', '/openapi/v3.json',
     '/swagger.json', '/swagger.yaml',
     '/api-docs', '/v2/api-docs', '/v3/api-docs',
     '/.well-known/openapi',
-    '/docs/openapi.json',
-    '/swagger/v1/swagger.json',
+    '/docs/openapi.json', '/docs/swagger.json',
+    '/swagger/v1/swagger.json', '/swagger/v2/swagger.json',
+    '/api/swagger.json', '/api/openapi.json',
+    '/spec.json', '/api/spec.json',
+    '/api-docs.json', '/api/api-docs',
   ],
   wsdl: ['?wsdl', '?WSDL', '/ws?wsdl', '/services?wsdl'],
   graphql: ['/graphql', '/.well-known/graphql'],
@@ -47,7 +50,7 @@ function detectFromContent(content: string, contentType?: string): SpecType | nu
 }
 
 /** Extract spec URL from Swagger UI / Redoc HTML pages */
-function extractSpecUrlFromHtml(html: string, baseUrl: string): string | null {
+async function extractSpecUrlFromHtml(html: string, baseUrl: string, timeout: number): Promise<string | null> {
   // Swagger UI: url: "..." or configUrl
   const swaggerUrlMatch = html.match(/url:\s*["']([^"']+)["']/);
   if (swaggerUrlMatch) return new URL(swaggerUrlMatch[1], baseUrl).href;
@@ -59,6 +62,30 @@ function extractSpecUrlFromHtml(html: string, baseUrl: string): string | null {
   // Link tag: <link rel="api-definition" href="...">
   const linkMatch = html.match(/<link[^>]+rel=["']api-definition["'][^>]+href=["']([^"']+)["']/);
   if (linkMatch) return new URL(linkMatch[1], baseUrl).href;
+
+  // Swagger UI initializer JS file: <script src="./swagger-initializer.js">
+  // Only fetch small config/initializer scripts, not large bundles
+  const scriptMatches = html.matchAll(/<script[^>]+src=["']([^"']*(?:initializer|config)[^"']*)["']/gi);
+  for (const match of scriptMatches) {
+    try {
+      const jsUrl = new URL(match[1], baseUrl).href;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      const jsRes = await fetch(jsUrl, { signal: controller.signal });
+      clearTimeout(timer);
+      if (jsRes.ok) {
+        const jsContent = await jsRes.text();
+        // Match url: "https://..." or url: "/api/..." but not url: "/"
+        const urlInJs = jsContent.match(/url:\s*["'](https?:\/\/[^"']+|\/[^"'/][^"']*)["']/);
+        if (urlInJs) return new URL(urlInJs[1], baseUrl).href;
+
+        // Match variable assignments like: const defaultDefinitionUrl = "https://..."
+        // or: var apiUrl = "https://..."
+        const varUrlMatch = jsContent.match(/(?:const|let|var)\s+\w*(?:url|definition|spec|swagger|openapi)\w*\s*=\s*["'](https?:\/\/[^"']+\.json[^"']*)["']/i);
+        if (varUrlMatch) return new URL(varUrlMatch[1], baseUrl).href;
+      }
+    } catch { /* continue */ }
+  }
 
   return null;
 }
@@ -85,7 +112,7 @@ async function probe(url: string, timeout: number): Promise<DetectionResult | nu
 
     // If HTML, try to extract spec URL from Swagger UI / Redoc
     if (contentType.includes('html')) {
-      const specUrl = extractSpecUrlFromHtml(content, url);
+      const specUrl = await extractSpecUrlFromHtml(content, url, timeout);
       if (specUrl) return probe(specUrl, timeout);
     }
 
