@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "api-to-tools"
+version = "0.1.0"
+description = "Universal library that converts any API (OpenAPI, WSDL/SOAP, GraphQL, gRPC, AsyncAPI) into LLM-callable tool definitions"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "SonAIengine" }]
+keywords = ["api", "openapi", "swagger", "wsdl", "soap", "graphql", "grpc", "mcp", "llm", "tools", "function-calling"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "prance>=23.6",       # OpenAPI parser
+    "openapi-spec-validator>=0.7",
+    "zeep>=4.2",          # WSDL/SOAP
+    "graphql-core>=3.2",  # GraphQL
+    "grpcio-tools>=1.60", # gRPC / protobuf
+    "mcp>=1.0",           # MCP SDK
+    "xmltodict>=0.13",    # XML <-> dict
+]
+
+[project.optional-dependencies]
+asyncapi = ["asyncapi-parser>=0.1"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+
+[project.scripts]
+api-to-tools = "api_to_tools.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SonAIengine/api-to-tools"
+Repository = "https://github.com/SonAIengine/api-to-tools"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/api_to_tools"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
