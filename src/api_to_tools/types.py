@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-SpecType = Literal["openapi", "wsdl", "graphql", "grpc", "asyncapi", "jsonrpc"]
+SpecType = Literal["openapi", "wsdl", "graphql", "grpc", "asyncapi", "jsonrpc", "jsbundle"]
 Protocol = Literal["rest", "soap", "graphql", "grpc", "jsonrpc", "async"]
 ResponseFormat = Literal["json", "xml", "protobuf", "binary"]
 ParameterIn = Literal["path", "query", "header", "body", "cookie"]

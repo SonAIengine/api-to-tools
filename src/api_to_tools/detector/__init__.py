@@ -146,7 +146,7 @@ def _probe_graphql(base_url: str, client: httpx.Client, timeout: float) -> Detec
     return None
 
 
-def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None) -> DetectionResult:
+def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None, scan_js: bool = False) -> DetectionResult:
     """Discover API spec from a URL.
 
     Tries direct detection, then probes well-known paths.
@@ -181,4 +181,11 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
             if result:
                 return result
 
-    raise ValueError(f"Could not detect API spec at {url}. Try providing the direct spec URL.")
+    # Fallback: JS bundle scanning
+    if scan_js:
+        return DetectionResult(type="jsbundle", spec_url=url)
+
+    raise ValueError(
+        f"Could not detect API spec at {url}. "
+        "Try providing the direct spec URL, or use scan_js=True to analyze JS bundles."
+    )

@@ -45,7 +45,9 @@ def _build_auth(args) -> AuthConfig | None:
 
 
 def _add_auth_args(parser: argparse.ArgumentParser):
-    """Add common auth arguments to a subparser."""
+    """Add common auth and discovery arguments to a subparser."""
+    parser.add_argument("--scan-js", action="store_true",
+                        help="Scan JS bundles to discover APIs (for sites without OpenAPI spec)")
     auth = parser.add_argument_group("authentication")
     auth.add_argument("--bearer", metavar="TOKEN", help="Bearer token")
     auth.add_argument("--basic", metavar="USER:PASS", help="Basic auth credentials")
@@ -62,7 +64,7 @@ def cmd_serve(args):
 
     auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url, auth=auth)
+    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
     print(f"Found {len(tools)} tools. Starting MCP server '{args.name}'...", file=sys.stderr)
     for t in tools:
         print(f"  - {t.name}", file=sys.stderr)
@@ -73,7 +75,7 @@ def cmd_serve(args):
 
 def cmd_list(args):
     auth = _build_auth(args)
-    tools = discover(args.url, auth=auth)
+    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]
@@ -96,7 +98,7 @@ def cmd_list(args):
 def cmd_info(args):
     auth = _build_auth(args)
     print(f"Discovering API at {args.url}...", file=sys.stderr)
-    tools = discover(args.url, auth=auth)
+    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
     summary = summarize(tools)
 
     print(f"Total tools: {summary['total']}\n")
@@ -119,7 +121,7 @@ def cmd_info(args):
 
 def cmd_export(args):
     auth = _build_auth(args)
-    tools = discover(args.url, auth=auth)
+    tools = discover(args.url, auth=auth, scan_js=getattr(args, "scan_js", False))
 
     if args.tag:
         tools = [t for t in tools if any(args.tag.lower() in tag.lower() for tag in t.tags)]

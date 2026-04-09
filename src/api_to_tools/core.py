@@ -32,7 +32,7 @@ def discover(url: str, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool
                          auth=AuthConfig(type="cookie", login_url="https://app.example.com/login",
                                          username="user@email.com", password="pass"))
     """
-    detect_kwargs = {k: kwargs[k] for k in ("timeout", "probe_paths") if k in kwargs}
+    detect_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in ("timeout", "probe_paths", "scan_js")}
     detection = detect(url, auth=auth, **detect_kwargs)
     return to_tools(detection, auth=auth, **kwargs)
 
@@ -40,12 +40,17 @@ def discover(url: str, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool
 def to_tools(detection: DetectionResult, *, auth: AuthConfig | None = None, **kwargs) -> list[Tool]:
     """Parse a detected spec into tools."""
     parser = get_parser(detection.type)
+
+    # jsbundle parser has its own fetch logic and needs auth
+    if detection.type == "jsbundle":
+        tools = parser(detection.spec_url, auth=auth)
     # WSDL/GraphQL need the URL, not raw content (libraries fetch themselves)
-    if detection.type in ("wsdl", "graphql"):
+    elif detection.type in ("wsdl", "graphql"):
         input_data = detection.spec_url
+        tools = parser(input_data, source_url=detection.spec_url)
     else:
         input_data = detection.raw_content or detection.spec_url
-    tools = parser(input_data, source_url=detection.spec_url)
+        tools = parser(input_data, source_url=detection.spec_url)
 
     # Store auth in tool metadata for execution
     if auth:
