@@ -48,7 +48,7 @@
     "jayson": "^4.3.0",
     "soap": "^1.6.4",
     "swagger2openapi": "^7.0.8",
-    "zod": "^4.3.6"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

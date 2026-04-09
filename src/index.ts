@@ -12,6 +12,7 @@ export { getParser } from './parsers/index.js';
 export { getExecutor } from './executors/index.js';
 export { createMcpServer } from './adapters/index.js';
 export type { McpServerOptions } from './adapters/index.js';
+export { groupByTag, groupByMethod, groupByProtocol, summarize, searchTools } from './utils.js';
 
 /**
  * Discover and parse API spec from a URL into tools.
