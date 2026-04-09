@@ -14,12 +14,20 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
     "lint": "eslint src/",
+    "prepublishOnly": "npm run build",
     "example": "tsx examples/basic.ts"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "keywords": [
     "api",
