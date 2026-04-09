@@ -48,6 +48,11 @@ def to_tools(detection: DetectionResult, *, auth: AuthConfig | None = None, **kw
         crawler_kwargs = {k: kwargs.pop(k) for k in list(kwargs)
                           if k in ("max_pages", "headless", "wait_time", "timeout", "backend", "safe_mode")}
         tools = parser(detection.spec_url, auth=auth, **crawler_kwargs)
+    # Nexacro platform: specialized crawler
+    elif detection.type == "nexacro":
+        nexacro_kwargs = {k: kwargs.pop(k) for k in list(kwargs)
+                          if k in ("max_pages", "headless", "wait_time", "timeout", "backend")}
+        tools = parser(detection.spec_url, auth=auth, **nexacro_kwargs)
     # jsbundle parser has its own fetch logic and needs auth
     elif detection.type == "jsbundle":
         tools = parser(detection.spec_url, auth=auth)

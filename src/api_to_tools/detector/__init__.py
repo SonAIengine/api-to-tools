@@ -146,6 +146,22 @@ def _probe_graphql(base_url: str, client: httpx.Client, timeout: float) -> Detec
     return None
 
 
+def _detect_nexacro(client: httpx.Client, url: str, timeout: float) -> bool:
+    """Detect if a site is a Nexacro-based application."""
+    try:
+        res = client.get(url, follow_redirects=True, timeout=timeout)
+        html = res.text.lower()
+        # Nexacro signatures in HTML
+        signatures = [
+            "nexacro", "nexaparametermap", "nexacromodel",
+            "nexacro.js", "nexacro14", "nexacro17", "nexacro.css",
+            "nexa/common", "/nexa/", ".lotte",
+        ]
+        return any(sig in html for sig in signatures)
+    except Exception:
+        return False
+
+
 def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None, scan_js: bool = False, crawl: bool = False) -> DetectionResult:
     """Discover API spec from a URL.
 
@@ -159,6 +175,10 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
     from api_to_tools.auth import get_authenticated_client
 
     with get_authenticated_client(auth) as client:
+        # Nexacro platform detection (before generic crawling)
+        if _detect_nexacro(client, url, timeout):
+            return DetectionResult(type="nexacro", spec_url=url)
+
         # GraphQL endpoint heuristic
         if "graphql" in url or url.endswith("/gql"):
             result = _probe_graphql(url.rstrip("/"), client, timeout)
