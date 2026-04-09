@@ -1,0 +1,61 @@
+asyncapi: 3.0.0
+info:
+  title: Chat Service
+  version: 1.0.0
+  description: A simple chat service
+
+channels:
+  chatMessage:
+    address: /chat/message
+    messages:
+      ChatMessage:
+        payload:
+          type: object
+          properties:
+            userId:
+              type: string
+              description: The user ID
+            message:
+              type: string
+              description: The chat message
+            timestamp:
+              type: string
+              description: ISO 8601 timestamp
+          required:
+            - userId
+            - message
+  userStatus:
+    address: /user/status
+    messages:
+      UserStatus:
+        payload:
+          type: object
+          properties:
+            userId:
+              type: string
+            status:
+              type: string
+              enum:
+                - online
+                - offline
+                - away
+          required:
+            - userId
+            - status
+
+operations:
+  sendMessage:
+    action: send
+    channel:
+      $ref: '#/channels/chatMessage'
+    summary: Send a chat message
+  receiveMessage:
+    action: receive
+    channel:
+      $ref: '#/channels/chatMessage'
+    summary: Receive a chat message
+  publishStatus:
+    action: send
+    channel:
+      $ref: '#/channels/userStatus'
+    summary: Publish user status update

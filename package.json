@@ -42,10 +42,12 @@
   },
   "dependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
+    "@asyncapi/parser": "^3.6.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "fast-xml-parser": "^5.5.11",
     "graphql": "^16.13.2",
     "jayson": "^4.3.0",
+    "protobufjs": "^8.0.1",
     "soap": "^1.6.4",
     "swagger2openapi": "^7.0.8",
     "zod": "^3.25.76"
