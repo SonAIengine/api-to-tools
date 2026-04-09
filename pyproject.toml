@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "api-to-tools"
-version = "0.10.0"
+version = "0.11.0"
 description = "Universal library that converts any API (OpenAPI, WSDL/SOAP, GraphQL, gRPC, AsyncAPI) into LLM-callable tool definitions"
 readme = "README.md"
 license = "MIT"
@@ -48,3 +48,10 @@ packages = ["src/api_to_tools"]
 [tool.ruff]
 target-version = "py310"
 line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

@@ -185,9 +185,9 @@ def normalize_route_url(route: str, base_origin: str) -> str:
     """Normalize a route (possibly relative) into a full URL."""
     if route.startswith("http"):
         return route
-    if route.startswith("/"):
-        return f"{base_origin}{route}"
-    return f"{base_origin}/{route.lstrip('/')}"
+    # Collapse any leading slashes so multi-slash routes don't produce //.
+    stripped = route.lstrip("/")
+    return f"{base_origin}/{stripped}"
 
 
 # ──────────────────────────────────────────────

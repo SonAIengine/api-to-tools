@@ -7,12 +7,15 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from api_to_tools._logging import get_logger
 from api_to_tools.constants import (
     DEFAULT_HTTP_TIMEOUT,
     NEXACRO_HTML_SIGNATURES,
     WELL_KNOWN_PATHS as _WELL_KNOWN_PATHS_RAW,
 )
 from api_to_tools.types import AuthConfig, DetectionResult, SpecType
+
+log = get_logger("detector")
 
 WELL_KNOWN_PATHS: dict[SpecType, list[str]] = dict(_WELL_KNOWN_PATHS_RAW)  # type: ignore[arg-type]
 
@@ -140,7 +143,8 @@ def _detect_nexacro(client: httpx.Client, url: str, timeout: float) -> bool:
         res = client.get(url, follow_redirects=True, timeout=timeout)
         html = res.text.lower()
         return any(sig in html for sig in NEXACRO_HTML_SIGNATURES)
-    except Exception:
+    except httpx.HTTPError as e:
+        log.debug("Nexacro detection failed for %s: %s", url, e)
         return False
 
 
@@ -150,6 +154,9 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
     Tries direct detection, then probes well-known paths.
     Supports authenticated discovery via AuthConfig.
     """
+    log.debug("detect() start url=%s crawl=%s scan_js=%s auth=%s",
+              url, crawl, scan_js, bool(auth))
+
     # Crawler mode: skip spec detection entirely, use browser
     if crawl:
         return DetectionResult(type="crawler", spec_url=url)
@@ -159,6 +166,7 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
     with get_authenticated_client(auth) as client:
         # Nexacro platform detection (before generic crawling)
         if _detect_nexacro(client, url, timeout):
+            log.info("Detected Nexacro platform at %s", url)
             return DetectionResult(type="nexacro", spec_url=url)
 
         # GraphQL endpoint heuristic
