@@ -13,9 +13,10 @@ from api_to_tools.types import AuthConfig, DetectionResult, ExecutionResult, Too
 
 
 # Kwargs recognized by each layer, grouped for clean filtering.
-_DETECT_KEYS = frozenset({"timeout", "probe_paths", "scan_js", "crawl"})
+_DETECT_KEYS = frozenset({"timeout", "probe_paths", "scan_js", "crawl", "cdp"})
 _CRAWLER_KEYS = frozenset({"max_pages", "headless", "wait_time", "timeout", "backend", "safe_mode"})
 _NEXACRO_KEYS = frozenset({"max_pages", "headless", "wait_time", "timeout", "backend"})
+_CDP_KEYS = frozenset({"max_pages", "wait_time", "timeout", "chrome_binary"})
 _FILTER_KEYS = frozenset({"base_url", "tags", "methods", "path_filter"})
 
 
@@ -91,6 +92,10 @@ def _run_parser(
 
     if spec_type == "static_spa":
         return parser(detection.spec_url, auth=auth)
+
+    if spec_type == "cdp":
+        cdp_kw, _ = _split_kwargs(kwargs, _CDP_KEYS)
+        return parser(detection.spec_url, auth=auth, **cdp_kw)
 
     if spec_type in ("wsdl", "graphql"):
         return parser(detection.spec_url, source_url=detection.spec_url)

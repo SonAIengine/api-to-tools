@@ -148,7 +148,7 @@ def _detect_nexacro(client: httpx.Client, url: str, timeout: float) -> bool:
         return False
 
 
-def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None, scan_js: bool = False, crawl: bool = False) -> DetectionResult:
+def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: AuthConfig | None = None, scan_js: bool = False, crawl: bool = False, cdp: bool = False) -> DetectionResult:
     """Discover API spec from a URL.
 
     Tries direct detection, then probes well-known paths.
@@ -160,6 +160,10 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
     # Crawler mode: skip spec detection entirely, use browser
     if crawl:
         return DetectionResult(type="crawler", spec_url=url)
+
+    # CDP mode: drive headless Chrome via DevTools Protocol (no Playwright)
+    if cdp:
+        return DetectionResult(type="cdp", spec_url=url)
 
     from api_to_tools.auth import get_authenticated_client
 

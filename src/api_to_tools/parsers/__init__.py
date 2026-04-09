@@ -26,6 +26,11 @@ def _lazy_static_spa(*args, **kwargs):
     return discover_static_spa(*args, **kwargs)
 
 
+def _lazy_cdp(*args, **kwargs):
+    from api_to_tools.parsers.cdp_crawler import crawl_with_cdp
+    return crawl_with_cdp(*args, **kwargs)
+
+
 PARSERS: dict[SpecType, callable] = {
     "openapi": parse_openapi,
     "wsdl": parse_wsdl,
@@ -35,6 +40,7 @@ PARSERS: dict[SpecType, callable] = {
     "crawler": _lazy_crawler,
     "nexacro": _lazy_nexacro,
     "static_spa": _lazy_static_spa,
+    "cdp": _lazy_cdp,
 }
 
 

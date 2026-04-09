@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 SpecType = Literal[
     "openapi", "wsdl", "graphql", "grpc", "asyncapi", "jsonrpc",
-    "jsbundle", "crawler", "nexacro", "static_spa",
+    "jsbundle", "crawler", "nexacro", "static_spa", "cdp",
 ]
 Protocol = Literal["rest", "soap", "graphql", "grpc", "jsonrpc", "async"]
 ResponseFormat = Literal["json", "xml", "protobuf", "binary"]

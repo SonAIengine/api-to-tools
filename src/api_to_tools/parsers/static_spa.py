@@ -270,6 +270,65 @@ def _walk_forward_for_body(js: str, end: int, limit: int = 500) -> tuple[str | N
     return method_override, body_keys
 
 
+# ──────────────────────────────────────────────
+# Mini JS interpreter — collect const/var string declarations
+# and evaluate "+"-concat / template-literal expressions
+# ──────────────────────────────────────────────
+
+# `const X = "..."` or `var X = "..."` or `let X = "..."`
+_CONST_RE = re.compile(
+    r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*'
+    r'(?:"([^"]*)"|\'([^\']*)\'|`([^`$]*)`)'
+)
+
+# `e.X = "..."` (CommonJS export)
+_EXPORT_STR_RE = re.compile(
+    r'\b\w+\.([A-Za-z_$][\w$]*)\s*=\s*'
+    r'(?:"([^"]*)"|\'([^\']*)\')'
+)
+
+
+def _collect_string_constants(js_source: str) -> dict[str, str]:
+    """Extract every top-level string constant we can recognise."""
+    constants: dict[str, str] = {}
+    for m in _CONST_RE.finditer(js_source):
+        name = m.group(1)
+        value = m.group(2) or m.group(3) or m.group(4) or ""
+        constants[name] = value
+    for m in _EXPORT_STR_RE.finditer(js_source):
+        name = m.group(1)
+        value = m.group(2) or m.group(3) or ""
+        if name not in constants:
+            constants[name] = value
+    return constants
+
+
+def _resolve_concat_expression(text: str, constants: dict[str, str]) -> list[str]:
+    """Find `"prefix" + var` or `var + "/path"` and resolve to API URLs."""
+    out: list[str] = []
+    # "/api/" + something  OR  something + "/path"
+    pattern = re.compile(
+        r'(?:"([^"]*)"|\'([^\']*)\')\s*\+\s*([A-Za-z_$][\w$.]*)|'
+        r'([A-Za-z_$][\w$.]*)\s*\+\s*(?:"([^"]*)"|\'([^\']*)\')'
+    )
+    for m in pattern.finditer(text):
+        groups = m.groups()
+        # Pattern A: "literal" + ident
+        if groups[0] is not None or groups[1] is not None:
+            literal = groups[0] or groups[1] or ""
+            ident = groups[2] or ""
+            base = constants.get(ident.split(".")[-1], "")
+            url = literal + base
+        else:
+            ident = groups[3] or ""
+            literal = groups[4] or groups[5] or ""
+            base = constants.get(ident.split(".")[-1], "")
+            url = base + literal
+        if "/api/" in url or url.startswith("/api"):
+            out.append(url)
+    return out
+
+
 def extract_api_calls_from_js(js_source: str) -> list[dict]:
     """Scan a JS source blob for API call sites without parsing.
 
@@ -277,6 +336,7 @@ def extract_api_calls_from_js(js_source: str) -> list[dict]:
     """
     found: list[dict] = []
 
+    # 1. Pure literal scan
     for pattern in _API_PATH_PATTERNS:
         for match in pattern.finditer(js_source):
             raw_path = match.group(1)
@@ -301,6 +361,18 @@ def extract_api_calls_from_js(js_source: str) -> list[dict]:
                 "url": path,
                 "body_params": body_params,
             })
+
+    # 2. Mini interpreter — track string constants and resolve concat
+    constants = _collect_string_constants(js_source)
+    if constants:
+        for url in _resolve_concat_expression(js_source, constants):
+            normalized = _normalize_template_expressions(url)
+            if _looks_like_api_path(normalized):
+                found.append({
+                    "method": _infer_method_from_path(normalized),
+                    "url": normalized,
+                    "body_params": [],
+                })
 
     return found
 
