@@ -3,19 +3,22 @@ import type { Tool, ToolExecutor, ToolExecutionResult } from '../types.js';
 function buildQuery(tool: Tool, args: Record<string, unknown>): string {
   const kind = tool.method; // 'query' or 'mutation'
   const params = tool.parameters;
+  const selectionSet = (tool.metadata?.selectionSet as string) ?? '';
 
   if (params.length === 0) {
-    return `${kind} { ${tool.name} }`;
+    return `${kind} { ${tool.name} ${selectionSet} }`;
   }
 
-  // Build variable definitions and arguments
-  const varDefs = params.map(p => `$${p.name}: ${p.type}${p.required ? '!' : ''}`).join(', ');
-  const fieldArgs = params
-    .filter(p => args[p.name] !== undefined)
-    .map(p => `${p.name}: $${p.name}`)
-    .join(', ');
+  // Only include variables that are actually provided in args
+  const usedParams = params.filter(p => args[p.name] !== undefined);
+  if (usedParams.length === 0) {
+    return `${kind} { ${tool.name} ${selectionSet} }`;
+  }
 
-  return `${kind}(${varDefs}) { ${tool.name}(${fieldArgs}) }`;
+  const varDefs = usedParams.map(p => `$${p.name}: ${p.type}${p.required ? '!' : ''}`).join(', ');
+  const fieldArgs = usedParams.map(p => `${p.name}: $${p.name}`).join(', ');
+
+  return `${kind}(${varDefs}) { ${tool.name}(${fieldArgs}) ${selectionSet} }`;
 }
 
 export const graphqlExecutor: ToolExecutor = {

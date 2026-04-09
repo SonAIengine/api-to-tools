@@ -97,8 +97,10 @@ async function probe(url: string, timeout: number): Promise<DetectionResult | nu
 
 /** Try GraphQL introspection */
 async function probeGraphQL(baseUrl: string, timeout: number): Promise<DetectionResult | null> {
-  for (const path of WELL_KNOWN_PATHS.graphql) {
-    const url = new URL(path, baseUrl).href;
+  // Try the base URL itself first, then well-known paths
+  const urlsToTry = [baseUrl, ...WELL_KNOWN_PATHS.graphql.map(p => new URL(p, baseUrl).href)];
+  const uniqueUrls = [...new Set(urlsToTry)];
+  for (const url of uniqueUrls) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
@@ -113,7 +115,8 @@ async function probeGraphQL(baseUrl: string, timeout: number): Promise<Detection
       if (res.ok) {
         const content = await res.text();
         if (content.includes('__schema')) {
-          return { type: 'graphql', specUrl: url, rawContent: content };
+          // Don't pass rawContent - parser needs to run full introspection
+          return { type: 'graphql', specUrl: url };
         }
       }
     } catch { /* continue */ }
@@ -128,7 +131,13 @@ async function probeGraphQL(baseUrl: string, timeout: number): Promise<Detection
 export async function detect(url: string, options: DiscoverOptions = {}): Promise<DetectionResult> {
   const timeout = options.timeout ?? 10_000;
 
-  // 1. Try the URL directly
+  // 1. If URL looks like a GraphQL endpoint, try introspection first
+  if (url.includes('graphql') || url.endsWith('/gql')) {
+    const gql = await probeGraphQL(url.replace(/\/$/, ''), timeout);
+    if (gql) return gql;
+  }
+
+  // 2. Try the URL directly (GET-based specs)
   const direct = await probe(url, timeout);
   if (direct) return direct;
 
