@@ -7,26 +7,14 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from api_to_tools.constants import (
+    DEFAULT_HTTP_TIMEOUT,
+    NEXACRO_HTML_SIGNATURES,
+    WELL_KNOWN_PATHS as _WELL_KNOWN_PATHS_RAW,
+)
 from api_to_tools.types import AuthConfig, DetectionResult, SpecType
 
-WELL_KNOWN_PATHS: dict[SpecType, list[str]] = {
-    "openapi": [
-        "/openapi.json", "/openapi.yaml", "/openapi/v3.json",
-        "/swagger.json", "/swagger.yaml",
-        "/api-docs", "/v2/api-docs", "/v3/api-docs",
-        "/.well-known/openapi",
-        "/docs/openapi.json", "/docs/swagger.json",
-        "/swagger/v1/swagger.json", "/swagger/v2/swagger.json",
-        "/api/swagger.json", "/api/openapi.json",
-        "/spec.json", "/api/spec.json",
-        "/api-docs.json", "/api/api-docs",
-    ],
-    "wsdl": ["?wsdl", "?WSDL", "/ws?wsdl", "/services?wsdl"],
-    "graphql": ["/graphql", "/.well-known/graphql"],
-    "grpc": [],
-    "asyncapi": ["/asyncapi.json", "/asyncapi.yaml"],
-    "jsonrpc": ["/rpc", "/jsonrpc"],
-}
+WELL_KNOWN_PATHS: dict[SpecType, list[str]] = dict(_WELL_KNOWN_PATHS_RAW)  # type: ignore[arg-type]
 
 GRAPHQL_PROBE_QUERY = '{"query":"{ __schema { types { name } } }"}'
 
@@ -151,13 +139,7 @@ def _detect_nexacro(client: httpx.Client, url: str, timeout: float) -> bool:
     try:
         res = client.get(url, follow_redirects=True, timeout=timeout)
         html = res.text.lower()
-        # Nexacro signatures in HTML
-        signatures = [
-            "nexacro", "nexaparametermap", "nexacromodel",
-            "nexacro.js", "nexacro14", "nexacro17", "nexacro.css",
-            "nexa/common", "/nexa/", ".lotte",
-        ]
-        return any(sig in html for sig in signatures)
+        return any(sig in html for sig in NEXACRO_HTML_SIGNATURES)
     except Exception:
         return False
 
@@ -190,20 +172,39 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
         if result:
             return result
 
-        # Well-known paths
+        # Well-known paths (parallel probing, OpenAPI first)
         if probe_paths:
             base = url.rstrip("/")
-            for paths in WELL_KNOWN_PATHS.values():
-                for path in paths:
-                    probe_url = f"{base}{path}" if path.startswith("?") else urljoin(base + "/", path.lstrip("/"))
-                    result = _probe(probe_url, client, timeout)
-                    if result:
-                        return result
+            # Priority order: OpenAPI is most common, probe first
+            ordered = list(WELL_KNOWN_PATHS.get("openapi", []))
+            for st, paths in WELL_KNOWN_PATHS.items():
+                if st != "openapi":
+                    ordered.extend(paths)
+
+            probe_urls = [
+                f"{base}{path}" if path.startswith("?") else urljoin(base + "/", path.lstrip("/"))
+                for path in ordered
+            ]
+
+            # Parallel batch probing (6 at a time)
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            batch_size = 6
+            for i in range(0, len(probe_urls), batch_size):
+                batch = probe_urls[i:i + batch_size]
+                with ThreadPoolExecutor(max_workers=batch_size) as ex:
+                    futures = {ex.submit(_probe, u, client, timeout): u for u in batch}
+                    for fut in as_completed(futures):
+                        try:
+                            res = fut.result()
+                            if res:
+                                return res
+                        except Exception:
+                            continue
 
             # GraphQL (POST-based)
-            result = _probe_graphql(base, client, timeout)
-            if result:
-                return result
+            gql_result = _probe_graphql(base, client, timeout)
+            if gql_result:
+                return gql_result
 
     # Authenticated Swagger discovery (login → guess backend → probe with Bearer)
     if auth and auth.username and auth.password:

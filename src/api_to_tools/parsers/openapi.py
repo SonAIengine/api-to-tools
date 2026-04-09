@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
+from api_to_tools.parsers._param_builder import schema_type_str, sanitize_name
 from api_to_tools.types import Tool, ToolParameter, ResponseFormat
 
 
@@ -92,14 +93,8 @@ def _resolve_schema(schema, root: dict, visited: set | None = None, max_depth: i
 # Schema → ToolParameter extraction
 # ──────────────────────────────────────────────
 
-def _schema_type_str(schema: dict) -> str:
-    """Get a human-readable type string from a schema."""
-    t = schema.get("type", "object")
-    if t == "array":
-        items = schema.get("items", {})
-        item_type = items.get("type", "object")
-        return f"array[{item_type}]"
-    return t
+# _schema_type_str is imported from _param_builder (as schema_type_str)
+_schema_type_str = schema_type_str
 
 
 def _schema_to_params(schema: dict, location: str = "body") -> list[ToolParameter]:
@@ -372,11 +367,9 @@ def _detect_response_format(responses: dict | None) -> ResponseFormat:
 
 
 def _sanitize_name(method: str, path: str) -> str:
-    name = f"{method}{path}"
-    name = re.sub(r"[{}]", "", name)
-    name = re.sub(r"[^a-zA-Z0-9]", "_", name)
-    name = re.sub(r"_+", "_", name)
-    return name.strip("_")
+    """Build a safe tool name from HTTP method + path."""
+    raw = re.sub(r"[{}]", "", f"{method}{path}")
+    return sanitize_name(raw)
 
 
 # ──────────────────────────────────────────────

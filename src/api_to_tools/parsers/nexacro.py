@@ -19,28 +19,35 @@ Strategy:
 
 from __future__ import annotations
 
-import json
 import re
+from typing import Any
 from urllib.parse import urlparse
 
-from api_to_tools.types import AuthConfig, Tool, ToolParameter
+from api_to_tools.constants import (
+    DEFAULT_BROWSER_WAIT,
+    DEFAULT_CRAWL_TIMEOUT,
+    DEFAULT_NETWORK_IDLE_TIMEOUT,
+    NEXACRO_URL_PATTERNS,
+)
+from api_to_tools.parsers._browser_utils import (
+    attempt_login,
+    collect_href_links,
+    launch_browser,
+)
+from api_to_tools.parsers._param_builder import sanitize_name
 from api_to_tools.parsers.ssv import (
     extract_ssv_schema,
     is_ssv_content,
     parse_ssv,
 )
+from api_to_tools.types import AuthConfig, Tool, ToolParameter
 
 
 def _is_nexacro_endpoint(url: str) -> bool:
     """Heuristic: is this URL likely a Nexacro service endpoint?"""
     parsed = urlparse(url)
     path = parsed.path.lower()
-    # Common Nexacro URL patterns
-    patterns = [
-        "/nexa/", "/nexacro/", "/nex/",
-        ".lotte", ".do", ".xml",  # extension-based dispatch
-    ]
-    return any(p in path for p in patterns) and parsed.scheme in ("http", "https")
+    return any(p in path for p in NEXACRO_URL_PATTERNS) and parsed.scheme in ("http", "https")
 
 
 def _parse_request_body(body: str) -> dict:
@@ -87,7 +94,7 @@ def _build_tool_from_nexacro_request(
     segments = [s for s in path.split("/") if s]
     last = segments[-1] if segments else "request"
     name = re.sub(r'\.[a-z]+$', '', last)  # strip .lotte, .do, etc.
-    name = re.sub(r'[^a-zA-Z0-9_]', '_', name).strip("_") or "request"
+    name = sanitize_name(name) or "request"
 
     # Parse request body for parameters
     parameters: list[ToolParameter] = []
@@ -190,9 +197,9 @@ def crawl_nexacro_site(
     *,
     auth: AuthConfig | None = None,
     max_pages: int = 50,
-    timeout: float = 30.0,
+    timeout: float = DEFAULT_CRAWL_TIMEOUT,
     headless: bool = True,
-    wait_time: float = 2.5,
+    wait_time: float = DEFAULT_BROWSER_WAIT,
     backend: str = "auto",
 ) -> list[Tool]:
     """Crawl a Nexacro-based website to discover API endpoints.
@@ -208,23 +215,15 @@ def crawl_nexacro_site(
             "Playwright is not installed. Install with: pip install playwright"
         ) from e
 
-    # Import helpers from the main crawler
-    from api_to_tools.parsers.crawler import (
-        _launch_browser,
-        _attempt_login,
-        _collect_href_links,
-    )
-
     captured_requests: list = []
     response_bodies: dict = {}  # request_id → response text
 
-    def _on_request(req):
+    def _on_request(req: Any) -> None:
         captured_requests.append(req)
 
-    def _on_response(response):
+    def _on_response(response: Any) -> None:
         """Capture SSV responses and menu data."""
         try:
-            url_l = response.url.lower()
             if not _is_nexacro_endpoint(response.url):
                 return
             if response.status != 200:
@@ -236,7 +235,7 @@ def crawl_nexacro_site(
             pass
 
     with sync_playwright() as p:
-        browser = _launch_browser(p, backend, headless)
+        browser = launch_browser(p, backend, headless)
         context = browser.contexts[0] if browser.contexts else browser.new_context(
             ignore_https_errors=True
         )
@@ -254,10 +253,10 @@ def crawl_nexacro_site(
 
         # 2. Login if credentials provided
         if auth and auth.username and auth.password:
-            _attempt_login(page, auth, wait_time)
+            attempt_login(page, auth, wait_time)
 
         try:
-            page.wait_for_load_state("networkidle", timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=int(DEFAULT_NETWORK_IDLE_TIMEOUT * 1000))
         except Exception:
             pass
         page.wait_for_timeout(int(wait_time * 1000))
@@ -265,7 +264,7 @@ def crawl_nexacro_site(
         # 3. Collect links and navigate
         parsed = urlparse(url)
         base_origin = f"{parsed.scheme}://{parsed.netloc}"
-        links = _collect_href_links(page, base_origin)[:max_pages]
+        links = collect_href_links(page, base_origin)[:max_pages]
 
         visited = set()
         for link in links:

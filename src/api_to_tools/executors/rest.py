@@ -1,4 +1,4 @@
-"""REST API executor."""
+"""REST API executor (with Nexacro SSV support)."""
 
 from __future__ import annotations
 
@@ -7,24 +7,30 @@ import json
 import httpx
 import xmltodict
 
-from api_to_tools.types import AuthConfig, Tool, ExecutionResult
-from api_to_tools.parsers.ssv import build_request_ssv, parse_ssv, is_ssv_content
+from api_to_tools.auth import (
+    build_auth_cookies,
+    build_auth_headers,
+    build_auth_params,
+    resolve_auth,
+)
+from api_to_tools.parsers.ssv import build_request_ssv, is_ssv_content, parse_ssv
+from api_to_tools.types import AuthConfig, ExecutionResult, Tool
 
 
 def _execute_nexacro(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> ExecutionResult:
     """Execute a Nexacro-style API call (SSV request/response)."""
-    from api_to_tools.auth import build_auth_headers, build_auth_cookies, resolve_auth
-
-    # Build SSV request body from args
-    body_params = {p.name: args[p.name] for p in tool.parameters
-                   if p.location == "body" and p.name in args}
+    body_params = {
+        p.name: args[p.name]
+        for p in tool.parameters
+        if p.location == "body" and p.name in args
+    }
     ssv_body = build_request_ssv(body_params)
 
     headers = {
         "Content-Type": "text/plain; charset=UTF-8",
         "Accept": "text/plain, */*",
     }
-    cookies = {}
+    cookies: dict[str, str] = {}
     if auth:
         resolved = resolve_auth(auth)
         headers.update(build_auth_headers(resolved))
@@ -54,8 +60,6 @@ def _execute_nexacro(tool: Tool, args: dict, *, auth: AuthConfig | None = None) 
 
 def execute_rest(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> ExecutionResult:
     """Execute a REST API call (with Nexacro SSV support)."""
-    from api_to_tools.auth import build_auth_headers, build_auth_params, build_auth_cookies, resolve_auth
-
     # Nexacro SSV variant: encode body as SSV, parse response as SSV
     if tool.metadata.get("protocol_variant") == "nexacro-ssv":
         return _execute_nexacro(tool, args, auth=auth)
