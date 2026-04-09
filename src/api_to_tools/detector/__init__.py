@@ -221,9 +221,11 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
         if result:
             return result
 
-    # Fallback: JS bundle scanning
+    # Static SPA analysis (browser-free): parse all JS chunks via AST
+    # This runs BEFORE Playwright crawler as an opt-in default fallback.
+    # Always try this if scan_js is explicitly True.
     if scan_js:
-        return DetectionResult(type="jsbundle", spec_url=url)
+        return DetectionResult(type="static_spa", spec_url=url)
 
     raise ValueError(
         f"Could not detect API spec at {url}. "

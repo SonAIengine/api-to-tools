@@ -21,6 +21,11 @@ def _lazy_nexacro(*args, **kwargs):
     return crawl_nexacro_site(*args, **kwargs)
 
 
+def _lazy_static_spa(*args, **kwargs):
+    from api_to_tools.parsers.static_spa import discover_static_spa
+    return discover_static_spa(*args, **kwargs)
+
+
 PARSERS: dict[SpecType, callable] = {
     "openapi": parse_openapi,
     "wsdl": parse_wsdl,
@@ -29,6 +34,7 @@ PARSERS: dict[SpecType, callable] = {
     "jsbundle": scan_js_bundles,
     "crawler": _lazy_crawler,
     "nexacro": _lazy_nexacro,
+    "static_spa": _lazy_static_spa,
 }
 
 

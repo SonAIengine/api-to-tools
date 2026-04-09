@@ -89,6 +89,9 @@ def _run_parser(
     if spec_type == "jsbundle":
         return parser(detection.spec_url, auth=auth)
 
+    if spec_type == "static_spa":
+        return parser(detection.spec_url, auth=auth)
+
     if spec_type in ("wsdl", "graphql"):
         return parser(detection.spec_url, source_url=detection.spec_url)
 
