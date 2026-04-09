@@ -63,7 +63,64 @@ def _extract_tag(path: str) -> str:
     return segments[0] if segments else "api"
 
 
-def _build_tool_from_request(request, seen: set) -> Tool | None:
+def _normalize_path_params(path: str) -> str:
+    """Regex-based normalization: numeric IDs, UUIDs, alphanumeric codes."""
+    # UUIDs
+    path = re.sub(
+        r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(/|$)',
+        r'/{uuid}\1',
+        path,
+    )
+    # Pure numeric IDs (/{id})
+    path = re.sub(r'/\d+(/|$)', r'/{id}\1', path)
+    # Long alphanumeric codes like LA01010000, AB12345, etc. (>= 5 chars, must have digit)
+    path = re.sub(r'/[A-Z][A-Z0-9]{4,}(/|$)', r'/{code}\1', path)
+    # Lowercase hash-like codes (e.g., sessionIDs)
+    path = re.sub(r'/[0-9a-f]{24,}(/|$)', r'/{hash}\1', path)
+    return path
+
+
+def _infer_templates_from_paths(paths: list[str]) -> dict[str, str]:
+    """2-pass: compare paths with same segment count to detect variable segments.
+
+    Returns a map of raw_path -> templated_path.
+    """
+    # Group by segment signature (ignoring last alphanumeric segment)
+    by_length: dict[int, list[list[str]]] = {}
+    for p in paths:
+        segs = p.strip("/").split("/")
+        by_length.setdefault(len(segs), []).append(segs)
+
+    # For each length group, find positions where values differ across paths
+    # but only if the prefix matches
+    templates: dict[str, str] = {}
+    for length, segment_lists in by_length.items():
+        if len(segment_lists) < 2:
+            continue
+        # Group by prefix (first N-1 segments)
+        prefix_groups: dict[tuple, list[list[str]]] = {}
+        for segs in segment_lists:
+            key = tuple(segs[:-1])
+            prefix_groups.setdefault(key, []).append(segs)
+
+        for prefix, group in prefix_groups.items():
+            if len(group) < 2:
+                continue
+            # Last segments differ → treat as path param
+            last_values = {segs[-1] for segs in group}
+            if len(last_values) >= 2:
+                for segs in group:
+                    raw = "/" + "/".join(segs)
+                    tmpl = "/" + "/".join(list(prefix) + ["{id}"])
+                    templates[raw] = tmpl
+
+        # Also check: every position could be variable if paths share same length but differ at multiple spots
+        # Only if they have matching HEAD prefix (at least 2 segs in common)
+
+    return templates
+
+
+def _build_tool_from_request(request, seen: set, path_templates: dict | None = None) -> Tool | None:
     """Convert a captured network request into a Tool."""
     url = request.url
     method = request.method
@@ -73,13 +130,13 @@ def _build_tool_from_request(request, seen: set) -> Tool | None:
 
     parsed = urlparse(url)
     path = parsed.path.rstrip("/") or "/"
-    # Normalize path params
-    normalized_path = re.sub(r'/\d+(/|$)', r'/{id}\1', path)
-    normalized_path = re.sub(
-        r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(/|$)',
-        r'/{uuid}\1',
-        normalized_path,
-    )
+
+    # 1st pass: regex normalization
+    normalized_path = _normalize_path_params(path)
+
+    # 2nd pass: template inference (if provided)
+    if path_templates and path in path_templates:
+        normalized_path = path_templates[path]
 
     key = (method, f"{parsed.netloc}{normalized_path}")
     if key in seen:
@@ -248,6 +305,7 @@ def crawl_site(
     wait_time: float = 2.0,
     backend: str = "auto",
     safe_mode: bool = True,
+    endpoint_rewrite: dict[str, str] | None = None,
 ) -> list[Tool]:
     """Crawl a website with a real browser to discover API endpoints.
 

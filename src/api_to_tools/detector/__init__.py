@@ -185,6 +185,13 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
             if result:
                 return result
 
+    # Authenticated Swagger discovery (login → guess backend → probe with Bearer)
+    if auth and auth.username and auth.password:
+        from api_to_tools.detector.swagger_discovery import discover_swagger_with_auth
+        result = discover_swagger_with_auth(url, auth, timeout=timeout)
+        if result:
+            return result
+
     # Fallback: JS bundle scanning
     if scan_js:
         return DetectionResult(type="jsbundle", spec_url=url)

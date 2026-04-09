@@ -12,8 +12,10 @@ import yaml
 from api_to_tools.types import Tool, ToolParameter, ResponseFormat
 
 
-def _resolve_refs(spec: dict, root: dict | None = None) -> dict:
-    """Simple $ref resolver (single-level)."""
+def _resolve_refs(spec: dict, root: dict | None = None, depth: int = 0, max_depth: int = 10) -> dict:
+    """Simple $ref resolver with depth limit to handle circular references."""
+    if depth > max_depth:
+        return spec
     if root is None:
         root = spec
     if isinstance(spec, dict):
@@ -21,11 +23,16 @@ def _resolve_refs(spec: dict, root: dict | None = None) -> dict:
             ref_path = spec["$ref"].lstrip("#/").split("/")
             resolved = root
             for part in ref_path:
-                resolved = resolved.get(part, {})
-            return _resolve_refs(resolved, root)
-        return {k: _resolve_refs(v, root) for k, v in spec.items()}
+                if isinstance(resolved, dict):
+                    resolved = resolved.get(part, {})
+                else:
+                    return spec
+            if resolved is spec:  # Self-reference
+                return spec
+            return _resolve_refs(resolved, root, depth + 1, max_depth)
+        return {k: _resolve_refs(v, root, depth + 1, max_depth) for k, v in spec.items()}
     if isinstance(spec, list):
-        return [_resolve_refs(item, root) for item in spec]
+        return [_resolve_refs(item, root, depth + 1, max_depth) for item in spec]
     return spec
 
 
@@ -88,7 +95,9 @@ def _extract_params(operation: dict) -> list[ToolParameter]:
 
     # Path/query/header params
     for p in operation.get("parameters", []):
-        schema = p.get("schema", {})
+        if not isinstance(p, dict) or "name" not in p:
+            continue  # Skip unresolved $ref
+        schema = p.get("schema", {}) if isinstance(p.get("schema"), dict) else {}
         params.append(ToolParameter(
             name=p["name"],
             type=schema.get("type") or p.get("type", "string"),
@@ -158,11 +167,12 @@ def parse_openapi(input_data: str | dict, source_url: str | None = None) -> list
                 continue
 
             name = operation.get("operationId") or _sanitize_name(method, path)
+            endpoint = f"{base_url.rstrip('/')}/{path.lstrip('/')}" if path.startswith("/") else f"{base_url}{path}"
             tools.append(Tool(
                 name=name,
                 description=operation.get("summary") or operation.get("description") or f"{method.upper()} {path}",
                 parameters=_extract_params(operation),
-                endpoint=f"{base_url}{path}",
+                endpoint=endpoint,
                 method=method.upper(),
                 protocol="rest",
                 response_format=_detect_response_format(operation.get("responses")),
