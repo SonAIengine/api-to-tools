@@ -8,6 +8,7 @@ manual tool wiring required.
 
 [![PyPI](https://img.shields.io/pypi/v/api-to-tools.svg)](https://pypi.org/project/api-to-tools/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![SafeSkill 93/100](https://img.shields.io/badge/SafeSkill-93%2F100_Verified%20Safe-brightgreen)](https://safeskill.dev/scan/sonaiengine-api-to-tools)
 
 ---
 
