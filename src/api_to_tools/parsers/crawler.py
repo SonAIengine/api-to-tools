@@ -24,6 +24,8 @@ from api_to_tools.parsers._browser_utils import (
     attempt_login,
     click_menu_items,
     collect_href_links,
+    exhaustive_interact,
+    fill_visible_forms,
     is_mutation_request,
     launch_browser,
     normalize_route_url,
@@ -35,7 +37,10 @@ from api_to_tools.parsers._param_builder import (
     normalize_path_params,
     sanitize_name,
 )
+from api_to_tools._logging import get_logger
 from api_to_tools.types import AuthConfig, Tool, ToolParameter
+
+log = get_logger("crawler")
 
 
 # ──────────────────────────────────────────────
@@ -137,6 +142,8 @@ def crawl_site(
     wait_time: float = DEFAULT_BROWSER_WAIT,
     backend: str = "auto",
     safe_mode: bool = True,
+    exhaustive: bool = False,
+    max_clicks_per_page: int = 100,
 ) -> list[Tool]:
     """Crawl a website with a real browser to discover API endpoints.
 
@@ -149,6 +156,11 @@ def crawl_site(
         wait_time: Time to wait per page for async requests (seconds)
         backend: "auto" | "system" | "playwright" | "lightpanda"
         safe_mode: Block mutation requests after login (default True)
+        exhaustive: If True, aggressively click every button/link on every
+                    visited page to trigger lazy-loaded API calls. Forms
+                    are filled with synthetic data. Only safe when safe_mode
+                    is also True. Default: False.
+        max_clicks_per_page: Cap on interactive clicks per page in exhaustive mode.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -273,11 +285,32 @@ def crawl_site(
                     page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
                     pass
+
+                # 4b. Exhaustive mode: click every button + fill forms to
+                #     trigger lazy API calls. Only safe with safe_mode=True.
+                if exhaustive:
+                    try:
+                        fill_visible_forms(page)
+                        exhaustive_interact(
+                            page,
+                            max_clicks=max_clicks_per_page,
+                            wait_per_click=0.8,
+                        )
+                        page.wait_for_timeout(int(wait_time * 500))
+                    except Exception as e:
+                        log.debug("exhaustive_interact failed on %s: %s", full, e)
             except Exception:
                 continue
 
         # 5. Click sidebar menu items for SPAs without href
         click_menu_items(page, base_origin, max_pages, wait_time, visited)
+
+        # 6. Final exhaustive sweep on current page
+        if exhaustive:
+            try:
+                exhaustive_interact(page, max_clicks=max_clicks_per_page, wait_per_click=0.8)
+            except Exception:
+                pass
 
         browser.close()
 

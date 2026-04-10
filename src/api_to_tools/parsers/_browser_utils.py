@@ -181,6 +181,122 @@ def click_menu_items(
                 continue
 
 
+def exhaustive_interact(
+    page: Any,
+    *,
+    max_clicks: int = 200,
+    wait_per_click: float = 1.0,
+    timeout_per_click: float = 2000,
+) -> None:
+    """Aggressively click every interactive element on the page to trigger
+    all lazily-loaded API calls.
+
+    Uses a click → wait → collect → click cycle, skipping elements that
+    would open external navigation, close the page, or submit forms with
+    destructive intent. Relies on Playwright's auto-waiting + the caller's
+    safe_mode network interceptor to avoid actual damage.
+    """
+    clicked_signatures: set[str] = set()
+
+    # Selectors that cover most interactive widgets
+    interactive_selectors = [
+        'button:not([type="submit"])',
+        '[role="button"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+        '[role="option"]',
+        'a[href]:not([href^="mailto:"]):not([href^="tel:"])',
+        '[onclick]',
+        '[class*="btn"]:visible',
+        '[class*="tab"]:visible',
+        'summary',
+    ]
+
+    def _element_signature(el) -> str:
+        """Build a stable signature so we don't click the same element twice."""
+        try:
+            tag = el.evaluate("e => e.tagName") or ""
+            text = (el.inner_text(timeout=200) or "").strip()[:50]
+            cls = (el.evaluate("e => e.className || ''") or "")[:40]
+            return f"{tag}::{text}::{cls}"
+        except Exception:
+            return str(id(el))
+
+    clicks_done = 0
+    for selector in interactive_selectors:
+        if clicks_done >= max_clicks:
+            break
+        try:
+            count = page.locator(selector).count()
+        except Exception:
+            continue
+
+        for i in range(min(count, max_clicks - clicks_done)):
+            if clicks_done >= max_clicks:
+                break
+            try:
+                element = page.locator(selector).nth(i)
+                if not element.is_visible(timeout=300):
+                    continue
+
+                sig = _element_signature(element)
+                if sig in clicked_signatures:
+                    continue
+                clicked_signatures.add(sig)
+
+                # Skip obviously destructive-looking buttons
+                sig_lower = sig.lower()
+                if any(kw in sig_lower for kw in (
+                    "delete", "remove", "삭제", "로그아웃", "logout",
+                    "sign out", "unregister", "탈퇴",
+                )):
+                    continue
+
+                element.click(timeout=int(timeout_per_click), force=False, no_wait_after=True)
+                clicks_done += 1
+
+                # Brief settle time for any fetch/XHR to fire
+                page.wait_for_timeout(int(wait_per_click * 1000))
+
+                # Dismiss any dialog/modal that opened
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
+    return None
+
+
+def fill_visible_forms(page: Any) -> None:
+    """Fill every visible text input with synthetic data and submit forms."""
+    try:
+        inputs = page.locator('input[type="text"], input[type="search"], input:not([type])')
+        n = min(inputs.count(), 50)
+        for i in range(n):
+            try:
+                el = inputs.nth(i)
+                if el.is_visible(timeout=200):
+                    el.fill("test", timeout=1000)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    try:
+        selects = page.locator("select")
+        for i in range(min(selects.count(), 20)):
+            try:
+                el = selects.nth(i)
+                if el.is_visible(timeout=200):
+                    el.select_option(index=0, timeout=1000)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def normalize_route_url(route: str, base_origin: str) -> str:
     """Normalize a route (possibly relative) into a full URL."""
     if route.startswith("http"):

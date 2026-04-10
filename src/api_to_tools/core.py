@@ -14,7 +14,8 @@ from api_to_tools.types import AuthConfig, DetectionResult, ExecutionResult, Too
 
 # Kwargs recognized by each layer, grouped for clean filtering.
 _DETECT_KEYS = frozenset({"timeout", "probe_paths", "scan_js", "crawl", "cdp"})
-_CRAWLER_KEYS = frozenset({"max_pages", "headless", "wait_time", "timeout", "backend", "safe_mode"})
+_CRAWLER_KEYS = frozenset({"max_pages", "headless", "wait_time", "timeout", "backend", "safe_mode",
+                            "exhaustive", "max_clicks_per_page"})
 _NEXACRO_KEYS = frozenset({"max_pages", "headless", "wait_time", "timeout", "backend"})
 _CDP_KEYS = frozenset({"max_pages", "wait_time", "timeout", "chrome_binary"})
 _FILTER_KEYS = frozenset({"base_url", "tags", "methods", "path_filter"})
