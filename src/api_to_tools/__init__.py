@@ -20,6 +20,7 @@ from api_to_tools.types import (
     Tool,
     ToolParameter,
 )
+from api_to_tools.testing import generate_test_code, run_smoke_tests
 from api_to_tools.utils import (
     group_by_method,
     group_by_tag,
@@ -43,6 +44,8 @@ __all__ = [
     "group_by_method",
     "summarize",
     "search_tools",
+    "run_smoke_tests",
+    "generate_test_code",
     "enable_debug_logging",
     "Tool",
     "ToolParameter",
