@@ -10,9 +10,11 @@ import httpx
 from api_to_tools._logging import get_logger
 from api_to_tools.constants import (
     DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_PROBE_RPS,
     NEXACRO_HTML_SIGNATURES,
     WELL_KNOWN_PATHS as _WELL_KNOWN_PATHS_RAW,
 )
+from api_to_tools.rate_limiter import get_domain_limiter
 from api_to_tools.types import AuthConfig, DetectionResult, SpecType
 
 log = get_logger("detector")
@@ -33,6 +35,8 @@ def _detect_from_content(content: str, content_type: str = "") -> SpecType | Non
                 return "openapi"
             if "asyncapi" in data:
                 return "asyncapi"
+            if isinstance(data.get("log"), dict) and "entries" in data["log"]:
+                return "har"
             if isinstance(data.get("data"), dict) and "__schema" in data["data"]:
                 return "graphql"
         except (json.JSONDecodeError, TypeError):
@@ -95,6 +99,8 @@ def _extract_spec_url_from_html(html: str, base_url: str, client: httpx.Client, 
 
 def _probe(url: str, client: httpx.Client, timeout: float) -> DetectionResult | None:
     """Probe a URL for an API spec."""
+    domain = urlparse(url).netloc
+    get_domain_limiter(domain, DEFAULT_PROBE_RPS).acquire()
     try:
         res = client.get(url, timeout=timeout, follow_redirects=True,
                          headers={"Accept": "application/json, application/xml, text/yaml, */*"})
@@ -184,8 +190,10 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
         if result:
             return result
 
-        # Well-known paths (parallel probing, OpenAPI first)
+        # Well-known paths (parallel probing, OpenAPI first, early exit)
         if probe_paths:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
             base = url.rstrip("/")
             # Priority order: OpenAPI is most common, probe first
             ordered = list(WELL_KNOWN_PATHS.get("openapi", []))
@@ -198,20 +206,18 @@ def detect(url: str, *, timeout: float = 10.0, probe_paths: bool = True, auth: A
                 for path in ordered
             ]
 
-            # Parallel batch probing (6 at a time)
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            batch_size = 6
-            for i in range(0, len(probe_urls), batch_size):
-                batch = probe_urls[i:i + batch_size]
-                with ThreadPoolExecutor(max_workers=batch_size) as ex:
-                    futures = {ex.submit(_probe, u, client, timeout): u for u in batch}
-                    for fut in as_completed(futures):
-                        try:
-                            res = fut.result()
-                            if res:
-                                return res
-                        except Exception:
-                            continue
+            # Single pool, cancel remaining on first hit
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                futures = {ex.submit(_probe, u, client, timeout): u for u in probe_urls}
+                for fut in as_completed(futures):
+                    try:
+                        res = fut.result()
+                        if res:
+                            for f in futures:
+                                f.cancel()
+                            return res
+                    except Exception:
+                        continue
 
             # GraphQL (POST-based)
             gql_result = _probe_graphql(base, client, timeout)

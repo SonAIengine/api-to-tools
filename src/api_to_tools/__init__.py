@@ -6,6 +6,7 @@ from api_to_tools.core import discover, execute, to_tools
 from api_to_tools.types import (
     AuthConfig,
     DetectionResult,
+    ExecutionResult,
     Protocol,
     SpecType,
     Tool,
@@ -33,6 +34,7 @@ __all__ = [
     "ToolParameter",
     "AuthConfig",
     "DetectionResult",
+    "ExecutionResult",
     "SpecType",
     "Protocol",
 ]

@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import asdict
 from typing import Any
+from urllib.parse import urlparse
 
+from api_to_tools.constants import DEFAULT_EXECUTOR_RPS
 from api_to_tools.detector import detect
 from api_to_tools.executors import get_executor
 from api_to_tools.parsers import get_parser
+from api_to_tools.rate_limiter import get_domain_limiter
 from api_to_tools.types import AuthConfig, DetectionResult, ExecutionResult, Tool
 
 
@@ -28,12 +31,19 @@ def _split_kwargs(kwargs: dict[str, Any], keys: frozenset[str]) -> tuple[dict, d
     return matching, remaining
 
 
-def discover(url: str, *, auth: AuthConfig | None = None, **kwargs: Any) -> list[Tool]:
+def discover(
+    url: str,
+    *,
+    auth: AuthConfig | None = None,
+    cache_ttl: float | None = None,
+    **kwargs: Any,
+) -> list[Tool]:
     """Discover and parse API spec from a URL into tools.
 
     Args:
         url: API spec URL or website URL
         auth: Authentication config for accessing protected APIs
+        cache_ttl: Cache results for this many seconds. None = no caching.
 
     Keyword arguments (forwarded downstream):
         timeout, probe_paths, scan_js, crawl: detector options
@@ -42,14 +52,27 @@ def discover(url: str, *, auth: AuthConfig | None = None, **kwargs: Any) -> list
 
     Examples:
         tools = discover("https://date.nager.at/openapi/v3.json")
-        tools = discover("https://internal.example.com/swagger.json",
-                         auth=AuthConfig(type="basic", username="admin", password="secret"))
-        tools = discover("https://admin.example.com/",
-                         auth=AuthConfig(type="cookie", username="admin", password="admin"))
+        tools = discover("https://example.com/api-docs", cache_ttl=300)
     """
+    # Check cache
+    if cache_ttl is not None:
+        from api_to_tools.cache import get_discover_cache
+        cache = get_discover_cache()
+        cached = cache.get(url)
+        if cached is not None:
+            return _apply_filters(list(cached), kwargs)
+
     detect_kw, remaining = _split_kwargs(kwargs, _DETECT_KEYS)
     detection = detect(url, auth=auth, **detect_kw)
-    return to_tools(detection, auth=auth, **remaining)
+    tools = to_tools(detection, auth=auth, **remaining)
+
+    # Store in cache (before filters, so different filter combos still benefit)
+    if cache_ttl is not None:
+        from api_to_tools.cache import get_discover_cache
+        cache = get_discover_cache()
+        cache.set(url, tools, ttl=cache_ttl)
+
+    return tools
 
 
 def to_tools(
@@ -98,6 +121,10 @@ def _run_parser(
         cdp_kw, _ = _split_kwargs(kwargs, _CDP_KEYS)
         return parser(detection.spec_url, auth=auth, **cdp_kw)
 
+    if spec_type in ("har", "asyncapi"):
+        input_data = detection.raw_content or detection.spec_url
+        return parser(input_data, source_url=detection.spec_url)
+
     if spec_type in ("wsdl", "graphql"):
         return parser(detection.spec_url, source_url=detection.spec_url)
 
@@ -108,10 +135,18 @@ def _run_parser(
 
 def _apply_filters(tools: list[Tool], kwargs: dict[str, Any]) -> list[Tool]:
     """Apply base_url override and result filters from kwargs."""
+    from copy import copy
+
     base_url = kwargs.get("base_url")
     if base_url:
+        new_tools = []
         for t in tools:
-            t.endpoint = re.sub(r"^https?://[^/]+", base_url, t.endpoint)
+            new_endpoint = re.sub(r"^https?://[^/]+", base_url, t.endpoint)
+            if new_endpoint != t.endpoint:
+                t = copy(t)
+                t.endpoint = new_endpoint
+            new_tools.append(t)
+        tools = new_tools
 
     tags = kwargs.get("tags")
     if tags:
@@ -141,13 +176,33 @@ def execute(
         1. Explicit `auth` parameter
         2. Auth stored in tool.metadata from discover()
         3. No auth
+
+    On 401 responses with OAuth2 auth, automatically refreshes the token
+    and retries once.
     """
     if not auth and "auth" in tool.metadata:
         auth = AuthConfig(**tool.metadata["auth"])
 
+    # Rate limit per target domain
+    domain = urlparse(tool.endpoint).netloc
+    if domain:
+        get_domain_limiter(domain, DEFAULT_EXECUTOR_RPS).acquire()
+
     executor = get_executor(tool.protocol)
     try:
-        return executor(tool, args, auth=auth)
+        result = executor(tool, args, auth=auth)
+
+        # Auto-retry on 401 if we have a refreshable auth
+        if result.status == 401 and auth and auth.type == "oauth2_client":
+            from api_to_tools.auth import get_token_manager
+            mgr = get_token_manager(auth)
+            new_token = mgr.refresh()
+            refreshed_auth = AuthConfig(type="bearer", token=new_token, verify_ssl=auth.verify_ssl)
+            if domain:
+                get_domain_limiter(domain, DEFAULT_EXECUTOR_RPS).acquire()
+            result = executor(tool, args, auth=refreshed_auth)
+
+        return result
     except Exception as e:
         return ExecutionResult(
             status=500,

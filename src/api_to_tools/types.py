@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 SpecType = Literal[
     "openapi", "wsdl", "graphql", "grpc", "asyncapi", "jsonrpc",
-    "jsbundle", "crawler", "nexacro", "static_spa", "cdp",
+    "jsbundle", "crawler", "nexacro", "static_spa", "cdp", "har",
 ]
 Protocol = Literal["rest", "soap", "graphql", "grpc", "jsonrpc", "async"]
 ResponseFormat = Literal["json", "xml", "protobuf", "binary"]
@@ -101,8 +101,11 @@ class AuthConfig:
     client_id: str | None = None
     client_secret: str | None = None
     scope: str | None = None
+    refresh_token: str | None = None
     # Custom
     headers: dict[str, str] = field(default_factory=dict)
+    # TLS
+    verify_ssl: bool = True
 
 
 @dataclass

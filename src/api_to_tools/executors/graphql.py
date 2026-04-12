@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 
+from api_to_tools.constants import DEFAULT_EXECUTOR_TIMEOUT
 from api_to_tools.types import AuthConfig, Tool, ExecutionResult
 
 
@@ -35,12 +36,14 @@ def execute_graphql(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -
         headers.update(build_auth_headers(resolved))
         cookies = build_auth_cookies(resolved)
 
+    verify = auth.verify_ssl if auth else True
     response = httpx.post(
         tool.endpoint,
         json={"query": query, "variables": variables},
         headers=headers,
         cookies=cookies or None,
-        timeout=30,
+        timeout=DEFAULT_EXECUTOR_TIMEOUT,
+        verify=verify,
     )
 
     data = response.json()

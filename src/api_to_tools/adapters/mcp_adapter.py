@@ -7,7 +7,6 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from api_to_tools.types import Tool
-from api_to_tools.executors import get_executor
 
 
 def create_mcp_server(tools: list[Tool], name: str = "api-to-tools") -> FastMCP:
@@ -34,11 +33,8 @@ def _register_tool(mcp: FastMCP, tool: Tool):
 
     @mcp.tool(name=tool.name, description=description)
     def _handler(**kwargs) -> str:
-        try:
-            executor = get_executor(tool.protocol)
-            result = executor(tool, kwargs)
-            if isinstance(result.data, str):
-                return result.data
-            return json.dumps(result.data, ensure_ascii=False, indent=2, default=str)
-        except Exception as e:
-            return f"Error: {e}"
+        from api_to_tools.core import execute
+        result = execute(tool, kwargs)
+        if isinstance(result.data, str):
+            return result.data
+        return json.dumps(result.data, ensure_ascii=False, indent=2, default=str)

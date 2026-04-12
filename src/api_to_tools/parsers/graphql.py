@@ -15,6 +15,7 @@ from graphql import (
     is_scalar_type,
 )
 
+from api_to_tools.constants import DEFAULT_SPEC_FETCH_TIMEOUT
 from api_to_tools.types import Tool, ToolParameter
 
 
@@ -133,7 +134,7 @@ def _fetch_schema(url: str):
         url,
         json={"query": get_introspection_query()},
         headers={"Content-Type": "application/json"},
-        timeout=30,
+        timeout=DEFAULT_SPEC_FETCH_TIMEOUT,
     )
     data = res.json()
     return build_client_schema(data["data"])

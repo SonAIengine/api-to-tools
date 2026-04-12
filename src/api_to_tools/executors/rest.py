@@ -7,6 +7,8 @@ import json
 import httpx
 import xmltodict
 
+from api_to_tools.constants import DEFAULT_EXECUTOR_TIMEOUT
+
 from api_to_tools.auth import (
     build_auth_cookies,
     build_auth_headers,
@@ -36,7 +38,8 @@ def _execute_nexacro(tool: Tool, args: dict, *, auth: AuthConfig | None = None) 
         headers.update(build_auth_headers(resolved))
         cookies = build_auth_cookies(resolved)
 
-    with httpx.Client(verify=False) as client:
+    verify = auth.verify_ssl if auth else True
+    with httpx.Client(verify=verify) as client:
         response = client.request(
             method=tool.method or "POST",
             url=tool.endpoint,
@@ -44,7 +47,7 @@ def _execute_nexacro(tool: Tool, args: dict, *, auth: AuthConfig | None = None) 
             headers=headers,
             cookies=cookies or None,
             follow_redirects=True,
-            timeout=30,
+            timeout=DEFAULT_EXECUTOR_TIMEOUT,
         )
 
     raw = response.text
@@ -101,7 +104,8 @@ def execute_rest(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> E
         query_params.update(build_auth_params(resolved))
         cookies = build_auth_cookies(resolved)
 
-    with httpx.Client() as client:
+    verify = auth.verify_ssl if auth else True
+    with httpx.Client(verify=verify) as client:
         response = client.request(
             method=tool.method,
             url=url,
@@ -111,7 +115,7 @@ def execute_rest(tool: Tool, args: dict, *, auth: AuthConfig | None = None) -> E
             json=body if body and isinstance(body, (dict, list)) else None,
             content=str(body) if body and not isinstance(body, (dict, list)) else None,
             follow_redirects=True,
-            timeout=30,
+            timeout=DEFAULT_EXECUTOR_TIMEOUT,
         )
 
     raw = response.text

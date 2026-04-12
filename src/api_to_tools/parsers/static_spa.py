@@ -398,10 +398,10 @@ def _infer_method_from_path(path: str) -> str:
 # ──────────────────────────────────────────────
 
 def _try_json_login(client: httpx.Client, base_url: str, auth: AuthConfig, timeout: float) -> str | None:
-    """Reuse swagger_discovery's login flow to obtain a bearer token."""
+    """Attempt API login to obtain a bearer token."""
     try:
-        from api_to_tools.detector.swagger_discovery import _try_login
-        return _try_login(client, base_url, auth)
+        from api_to_tools.auth import try_api_login
+        return try_api_login(client, base_url, auth)
     except Exception as e:
         log.debug("Login failed: %s", e)
         return None

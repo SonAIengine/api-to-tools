@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from api_to_tools._logging import get_logger
+from api_to_tools.constants import DEFAULT_AUTH_TIMEOUT
 from api_to_tools.parsers._browser_utils import is_mutation_request
 from api_to_tools.parsers._param_builder import (
     extract_tag_from_path,
@@ -147,14 +148,14 @@ class CDPSession:
 # ──────────────────────────────────────────────
 
 def _login_and_get_cookies(url: str, auth: AuthConfig) -> list[dict]:
-    """Reuse swagger_discovery's _try_login to obtain a session, then return cookies."""
-    from api_to_tools.detector.swagger_discovery import _try_login
+    """Attempt API login and return cookies for CDP injection."""
+    from api_to_tools.auth import try_api_login
 
     parsed = urlparse(url)
     domain = parsed.netloc
 
-    with httpx.Client(verify=False, follow_redirects=True, timeout=15) as client:
-        _try_login(client, url, auth)
+    with httpx.Client(verify=auth.verify_ssl, follow_redirects=True, timeout=DEFAULT_AUTH_TIMEOUT) as client:
+        try_api_login(client, url, auth)
         cookies = []
         for k, v in client.cookies.items():
             cookies.append({

@@ -119,3 +119,25 @@ def test_formats_preserve_enum():
     tools = [_make_tool("x", params=params)]
     anthropic = to_anthropic_tools(tools)
     assert anthropic[0]["input_schema"]["properties"]["status"]["enum"] == ["A", "B"]
+
+
+def test_formats_array_type():
+    """array[object] should become {"type": "array", "items": {"type": "object"}}."""
+    params = [
+        ToolParameter(name="items", type="array[object]", required=True),
+        ToolParameter(name="tags", type="array[string]", required=False),
+    ]
+    tools = [_make_tool("x", params=params)]
+    openai = to_function_calling(tools)
+    props = openai[0]["function"]["parameters"]["properties"]
+    assert props["items"]["type"] == "array"
+    assert props["items"]["items"]["type"] == "object"
+    assert props["tags"]["type"] == "array"
+    assert props["tags"]["items"]["type"] == "string"
+
+
+def test_formats_unknown_type_falls_back_to_string():
+    params = [ToolParameter(name="x", type="unknown_custom", required=False)]
+    tools = [_make_tool("x", params=params)]
+    result = to_anthropic_tools(tools)
+    assert result[0]["input_schema"]["properties"]["x"]["type"] == "string"

@@ -11,6 +11,19 @@ DEFAULT_SPEC_FETCH_TIMEOUT = 30.0
 DEFAULT_CRAWL_TIMEOUT = 30.0
 DEFAULT_BROWSER_WAIT = 2.5
 DEFAULT_NETWORK_IDLE_TIMEOUT = 10.0
+DEFAULT_AUTH_TIMEOUT = 15.0
+DEFAULT_PROBE_TIMEOUT = 4.0
+DEFAULT_EXECUTOR_TIMEOUT = 30.0
+DEFAULT_JS_FETCH_TIMEOUT = 8.0
+
+# ──────────────────────────────────────────────
+# Rate limiting
+# ──────────────────────────────────────────────
+
+# Max requests per second for discovery probing (swagger_discovery, detector)
+DEFAULT_PROBE_RPS = 20.0
+# Max requests per second for API execution
+DEFAULT_EXECUTOR_RPS = 10.0
 
 # ──────────────────────────────────────────────
 # HTTP methods

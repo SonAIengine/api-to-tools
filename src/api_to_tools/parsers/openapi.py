@@ -9,8 +9,9 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
+from api_to_tools.constants import DEFAULT_SPEC_FETCH_TIMEOUT
 from api_to_tools.parsers._param_builder import schema_type_str, sanitize_name
-from api_to_tools.types import Tool, ToolParameter, ResponseFormat
+from api_to_tools.types import AuthConfig, Tool, ToolParameter, ResponseFormat
 
 
 # ──────────────────────────────────────────────
@@ -331,6 +332,120 @@ def _build_description(operation: dict, path: str, method: str) -> str:
 
 
 # ──────────────────────────────────────────────
+# Security scheme extraction
+# ──────────────────────────────────────────────
+
+def extract_security_schemes(spec: dict) -> list[dict]:
+    """Extract security schemes from an OpenAPI spec as structured dicts.
+
+    Returns a list of dicts, each representing one auth method.
+    Internal keys prefixed with `_` (e.g. `_scheme_name`) are metadata
+    and should not be passed to AuthConfig directly.
+    Use `security_schemes_to_auth_configs()` for AuthConfig conversion.
+
+    Supports:
+    - http/basic → type="basic"
+    - http/bearer → type="bearer"
+    - apiKey (header or query) → type="api_key"
+    - oauth2 (all flows) → type="oauth2_client" with token_url/scopes
+    """
+    # OpenAPI 3.x
+    components = spec.get("components", {})
+    schemes = components.get("securitySchemes", {})
+
+    # Swagger 2.x
+    if not schemes:
+        schemes = spec.get("securityDefinitions", {})
+
+    results: list[dict] = []
+    for name, scheme in schemes.items():
+        if not isinstance(scheme, dict):
+            continue
+
+        scheme_type = scheme.get("type", "")
+        auth_dict: dict = {"_scheme_name": name}
+
+        if scheme_type == "http":
+            http_scheme = scheme.get("scheme", "").lower()
+            if http_scheme == "basic":
+                auth_dict.update(type="basic")
+            elif http_scheme == "bearer":
+                auth_dict.update(type="bearer", _bearer_format=scheme.get("bearerFormat"))
+            else:
+                continue
+
+        elif scheme_type == "apiKey":
+            location = scheme.get("in", "header")
+            key_name = scheme.get("name", "")
+            if not key_name:
+                continue
+            auth_dict.update(
+                type="api_key",
+                key=key_name,
+                location="header" if location == "header" else "query",
+            )
+
+        elif scheme_type == "oauth2":
+            flows = scheme.get("flows", {})
+            # Prefer client_credentials, then authorizationCode, then implicit
+            flow = (
+                flows.get("clientCredentials")
+                or flows.get("authorizationCode")
+                or flows.get("password")
+                or flows.get("implicit")
+                or {}
+            )
+            token_url = flow.get("tokenUrl", "")
+            scopes = list((flow.get("scopes") or {}).keys())
+            auth_dict.update(
+                type="oauth2_client",
+                token_url=token_url,
+                scope=" ".join(scopes) if scopes else None,
+                _authorization_url=flow.get("authorizationUrl"),
+            )
+
+        # Swagger 2.x: type="basic"
+        elif scheme_type == "basic":
+            auth_dict.update(type="basic")
+
+        else:
+            continue
+
+        results.append(auth_dict)
+
+    return results
+
+
+def security_schemes_to_auth_configs(spec: dict) -> list[AuthConfig]:
+    """Convert OpenAPI security schemes to AuthConfig objects.
+
+    Only returns configs that are usable without additional user input
+    (i.e. api_key and oauth2_client with token_url). Basic and bearer
+    require credentials/tokens from the user.
+    """
+    configs: list[AuthConfig] = []
+    for scheme in extract_security_schemes(spec):
+        auth_type = scheme.get("type")
+        if auth_type == "api_key":
+            configs.append(AuthConfig(
+                type="api_key",
+                key=scheme.get("key", ""),
+                location=scheme.get("location", "header"),
+            ))
+        elif auth_type == "oauth2_client" and scheme.get("token_url"):
+            configs.append(AuthConfig(
+                type="oauth2_client",
+                token_url=scheme.get("token_url"),
+                scope=scheme.get("scope"),
+            ))
+        elif auth_type == "basic":
+            configs.append(AuthConfig(type="basic"))
+        elif auth_type == "bearer":
+            configs.append(AuthConfig(type="bearer"))
+    return configs
+
+
+# ──────────────────────────────────────────────
 # Utilities
 # ──────────────────────────────────────────────
 
@@ -380,7 +495,7 @@ def parse_openapi(input_data: str | dict, source_url: str | None = None) -> list
     """Parse OpenAPI/Swagger spec into tools with rich parameter and response info."""
     if isinstance(input_data, str):
         if input_data.startswith("http://") or input_data.startswith("https://"):
-            res = httpx.get(input_data, follow_redirects=True, timeout=30)
+            res = httpx.get(input_data, follow_redirects=True, timeout=DEFAULT_SPEC_FETCH_TIMEOUT)
             input_data = res.text
             source_url = source_url or res.url.__str__()
 
@@ -397,6 +512,11 @@ def parse_openapi(input_data: str | dict, source_url: str | None = None) -> list
     base_url = _get_base_url(spec, source_url)
     http_methods = {"get", "post", "put", "patch", "delete", "head", "options"}
     tools: list[Tool] = []
+
+    # Extract security schemes once for the entire spec
+    security_schemes = extract_security_schemes(spec)
+    # Global security requirements
+    global_security = spec.get("security", [])
 
     for path, methods in spec.get("paths", {}).items():
         if not isinstance(methods, dict):
@@ -426,6 +546,18 @@ def parse_openapi(input_data: str | dict, source_url: str | None = None) -> list
             if operation.get("deprecated"):
                 metadata["deprecated"] = True
                 description = f"[DEPRECATED] {description}"
+
+            # Security: operation-level overrides global
+            op_security = operation.get("security", global_security)
+            if op_security and security_schemes:
+                # Map required scheme names to their definitions
+                required_names = set()
+                for req in op_security:
+                    if isinstance(req, dict):
+                        required_names.update(req.keys())
+                matched = [s for s in security_schemes if s.get("_scheme_name") in required_names]
+                if matched:
+                    metadata["security_schemes"] = matched
 
             tools.append(Tool(
                 name=name,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from api_to_tools.types import SpecType, Tool
+from api_to_tools.parsers.asyncapi import parse_asyncapi
 from api_to_tools.parsers.openapi import parse_openapi
 from api_to_tools.parsers.wsdl import parse_wsdl
 from api_to_tools.parsers.graphql import parse_graphql
 from api_to_tools.parsers.grpc import parse_grpc
+from api_to_tools.parsers.har import parse_har
 from api_to_tools.parsers.jsbundle import scan_js_bundles
 
 
@@ -41,6 +43,8 @@ PARSERS: dict[SpecType, callable] = {
     "nexacro": _lazy_nexacro,
     "static_spa": _lazy_static_spa,
     "cdp": _lazy_cdp,
+    "har": parse_har,
+    "asyncapi": parse_asyncapi,
 }
 
 

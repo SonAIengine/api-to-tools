@@ -17,11 +17,21 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 import httpx
 
 from api_to_tools._logging import get_logger
+from api_to_tools.auth import try_api_login
+from api_to_tools.constants import (
+    DEFAULT_AUTH_TIMEOUT,
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_JS_FETCH_TIMEOUT,
+    DEFAULT_PROBE_RPS,
+    DEFAULT_PROBE_TIMEOUT,
+)
+from api_to_tools.rate_limiter import get_domain_limiter
 from api_to_tools.types import AuthConfig, DetectionResult
 
 log = get_logger("swagger_discovery")
@@ -97,25 +107,6 @@ SWAGGER_SUFFIXES = [
     # --- GraphQL schema download ---
     "/graphql/schema",
     "/graphql.json",
-]
-
-
-# Login endpoint patterns
-LOGIN_PATTERNS = [
-    "/login",
-    "/auth/login",
-    "/signin",
-    "/auth/signin",
-    "/v1/login",
-    "/v2/login",
-    "/api/login",
-    "/api/auth/login",
-    "/api/v1/auth/login",
-    "/api/v2/auth/login",
-    "/api/v1/login",
-    "/api/v2/login",
-    "/user/login",
-    "/users/login",
 ]
 
 
@@ -195,7 +186,7 @@ def extract_base_urls_from_js_bundles(
     client: httpx.Client,
     frontend_url: str,
     max_bundles: int = 30,
-    timeout: float = 8.0,
+    timeout: float = DEFAULT_JS_FETCH_TIMEOUT,
 ) -> set[str]:
     """Download JS bundles from the frontend and extract backend URL literals."""
     bases: set[str] = set()
@@ -240,7 +231,7 @@ def _extract_api_prefixes_from_text(text: str) -> set[str]:
 def _extract_api_prefixes(client: httpx.Client, url: str) -> list[str]:
     prefixes: set[str] = set()
     try:
-        res = client.get(url, follow_redirects=True, timeout=10)
+        res = client.get(url, follow_redirects=True, timeout=DEFAULT_HTTP_TIMEOUT)
         html = res.text
         prefixes.update(_extract_api_prefixes_from_text(html))
 
@@ -251,7 +242,7 @@ def _extract_api_prefixes(client: httpx.Client, url: str) -> list[str]:
             for js_url in js_urls[:15]:
                 full = f"{origin}{js_url}" if js_url.startswith("/") else js_url
                 try:
-                    jr = client.get(full, timeout=8)
+                    jr = client.get(full, timeout=DEFAULT_JS_FETCH_TIMEOUT)
                     prefixes.update(_extract_api_prefixes_from_text(jr.text))
                 except httpx.HTTPError:
                     continue
@@ -306,128 +297,13 @@ def _guess_backend_domains(frontend_url: str) -> list[str]:
 
 
 # ──────────────────────────────────────────────
-# Login with CSRF support (Priority 3)
+# Login helper — delegates to auth.try_api_login
 # ──────────────────────────────────────────────
 
-def _extract_csrf_token(html: str) -> tuple[str | None, str | None]:
-    """Find a CSRF token in HTML meta or hidden input. Returns (name, value)."""
-    # <meta name="csrf-token" content="...">
-    m = re.search(
-        r'<meta[^>]+name=["\']([^"\']*csrf[^"\']*)["\'][^>]+content=["\']([^"\']+)["\']',
-        html, re.I,
-    )
-    if m:
-        return m.group(1), m.group(2)
-    # <input type="hidden" name="_csrf" value="...">
-    m = re.search(
-        r'<input[^>]+name=["\']([^"\']*(?:csrf|_token|xsrf)[^"\']*)["\'][^>]+value=["\']([^"\']+)["\']',
-        html, re.I,
-    )
-    if m:
-        return m.group(1), m.group(2)
-    return None, None
-
-
 def _try_login(client: httpx.Client, frontend_url: str, auth: AuthConfig) -> str | None:
-    """Attempt to login via common API endpoints and return an access token."""
-    parsed = urlparse(frontend_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-
-    login_payloads = [
-        {"loginId": auth.username, "password": auth.password},
-        {"username": auth.username, "password": auth.password},
-        {"id": auth.username, "password": auth.password},
-        {"email": auth.username, "password": auth.password},
-        {"userId": auth.username, "password": auth.password},
-        {"user": auth.username, "pass": auth.password},
-    ]
-
+    """Attempt login with auto-discovered API prefixes."""
     prefixes = _extract_api_prefixes(client, frontend_url)
-
-    # Build candidate login URLs
-    login_urls: list[str] = []
-    for prefix in prefixes:
-        for pattern in LOGIN_PATTERNS:
-            login_urls.append(f"{base}{prefix}{pattern}")
-    for pattern in LOGIN_PATTERNS:
-        login_urls.append(f"{base}{pattern}")
-    login_urls = list(dict.fromkeys(login_urls))
-
-    # Pre-fetch frontend for CSRF token if needed
-    csrf_name, csrf_value = None, None
-    try:
-        html = client.get(frontend_url, timeout=10).text
-        csrf_name, csrf_value = _extract_csrf_token(html)
-    except httpx.HTTPError:
-        pass
-
-    for url in login_urls:
-        for payload in login_payloads:
-            if csrf_name and csrf_value:
-                payload_with_csrf = {**payload, csrf_name: csrf_value}
-            else:
-                payload_with_csrf = payload
-
-            for u in [url, url.rstrip("/") + "/"]:
-                # Try JSON first
-                try:
-                    headers = {}
-                    if csrf_name and csrf_value:
-                        headers[f"X-{csrf_name.upper()}"] = csrf_value
-                    res = client.post(u, json=payload_with_csrf, headers=headers, timeout=10)
-                    if res.status_code == 200:
-                        try:
-                            body = res.json()
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-                        token = _extract_token(body)
-                        if token:
-                            log.info("Login succeeded at %s", u)
-                            return token
-                except httpx.HTTPError:
-                    continue
-
-                # Try form-encoded
-                try:
-                    res = client.post(u, data=payload_with_csrf, timeout=10)
-                    if res.status_code == 200:
-                        try:
-                            body = res.json()
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-                        token = _extract_token(body)
-                        if token:
-                            log.info("Login succeeded at %s (form)", u)
-                            return token
-                except httpx.HTTPError:
-                    continue
-
-    return None
-
-
-def _extract_token(body) -> str | None:
-    """Recursively locate an access token inside a JSON response."""
-    if isinstance(body, str):
-        return body if body.startswith("eyJ") else None
-    if isinstance(body, dict):
-        for key in (
-            "accessToken", "access_token", "token", "jwt", "id_token",
-            "idToken", "authToken", "bearerToken",
-        ):
-            if key in body:
-                val = body[key]
-                if isinstance(val, str) and val.startswith("eyJ"):
-                    return val
-                if isinstance(val, dict):
-                    result = _extract_token(val)
-                    if result:
-                        return result
-        for key in ("payload", "data", "result", "body", "response"):
-            if key in body and isinstance(body[key], dict):
-                result = _extract_token(body[key])
-                if result:
-                    return result
-    return None
+    return try_api_login(client, frontend_url, auth, prefixes=prefixes)
 
 
 # ──────────────────────────────────────────────
@@ -451,6 +327,11 @@ def _probe_single(
     if _recursion_depth > 2:
         return None
 
+    # Rate limit per target domain
+    domain = urlparse(url).netloc
+    limiter = get_domain_limiter(domain, DEFAULT_PROBE_RPS)
+    limiter.acquire()
+
     # Build header attempts in order of likelihood
     attempts: list[dict] = []
     if token:
@@ -458,7 +339,7 @@ def _probe_single(
     attempts.append({})  # cookie only (client already has cookies from login)
 
     # Short per-probe timeout so we fail fast
-    probe_timeout = min(timeout, 4.0)
+    probe_timeout = min(timeout, DEFAULT_PROBE_TIMEOUT)
 
     for headers in attempts:
         try:
@@ -546,6 +427,16 @@ def _build_probe_urls(domain: str, prefixes: list[str]) -> list[str]:
     return ordered
 
 
+def _cancel_remaining(futures: dict[Future, str]) -> None:
+    """Best-effort cancel all pending futures."""
+    for fut in futures:
+        fut.cancel()
+
+
+# Max concurrent probes per domain — keeps request fan-out bounded
+_PROBE_WORKERS = 12
+
+
 def _probe_swagger(
     client: httpx.Client,
     domain: str,
@@ -553,14 +444,23 @@ def _probe_swagger(
     token: str | None,
     timeout: float,
 ) -> DetectionResult | None:
-    """Try all swagger path combinations on a domain (ordered by priority)."""
+    """Try all swagger path combinations on a domain (parallel, early exit)."""
     urls_to_try = _build_probe_urls(domain, prefixes)
-    log.debug("Probing %d URLs on %s (tiered)", len(urls_to_try), domain)
+    log.debug("Probing %d URLs on %s (parallel, %d workers)", len(urls_to_try), domain, _PROBE_WORKERS)
 
-    for url in urls_to_try:
-        result = _probe_single(client, url, token, timeout)
-        if result:
-            return result
+    with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as executor:
+        futures: dict[Future, str] = {
+            executor.submit(_probe_single, client, url, token, timeout): url
+            for url in urls_to_try
+        }
+        for fut in as_completed(futures):
+            try:
+                result = fut.result()
+                if result:
+                    _cancel_remaining(futures)
+                    return result
+            except Exception:
+                continue
     return None
 
 
@@ -572,12 +472,12 @@ def discover_swagger_with_auth(
     url: str,
     auth: AuthConfig,
     *,
-    timeout: float = 15.0,
+    timeout: float = DEFAULT_AUTH_TIMEOUT,
 ) -> DetectionResult | None:
     """Find a Swagger/OpenAPI spec by combining login, domain guessing,
     JS base URL extraction, and multi-auth probing."""
 
-    with httpx.Client(follow_redirects=True, verify=False, timeout=timeout) as client:
+    with httpx.Client(follow_redirects=True, verify=auth.verify_ssl, timeout=timeout) as client:
         # Step 1: Login → token
         token = _try_login(client, url, auth)
 
@@ -608,10 +508,22 @@ def discover_swagger_with_auth(
             len(all_domains), len(prefixes), len(SWAGGER_SUFFIXES),
         )
 
-        # Step 4: Multi-backend probing (Priority 4)
-        for domain in all_domains:
-            result = _probe_swagger(client, domain, prefixes, token, timeout)
-            if result:
-                return result
+        # Step 4: Multi-backend probing — parallel across domains (Priority 4)
+        # Each domain internally runs parallel URL probing via _probe_swagger.
+        # We probe up to 4 domains concurrently and early-exit on first hit.
+        _DOMAIN_WORKERS = min(4, len(all_domains))
+        with ThreadPoolExecutor(max_workers=_DOMAIN_WORKERS) as executor:
+            futures: dict[Future, str] = {
+                executor.submit(_probe_swagger, client, domain, prefixes, token, timeout): domain
+                for domain in all_domains
+            }
+            for fut in as_completed(futures):
+                try:
+                    result = fut.result()
+                    if result:
+                        _cancel_remaining(futures)
+                        return result
+                except Exception:
+                    continue
 
     return None

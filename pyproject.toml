@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "api-to-tools"
-version = "0.14.0"
+version = "0.15.0"
 description = "Universal library that converts any API (OpenAPI, WSDL/SOAP, GraphQL, gRPC, AsyncAPI) into LLM-callable tool definitions"
 readme = "README.md"
 license = "MIT"
@@ -31,7 +31,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-asyncapi = ["asyncapi-parser>=0.1"]
 crawler = ["playwright>=1.40"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4", "playwright>=1.40"]
 
