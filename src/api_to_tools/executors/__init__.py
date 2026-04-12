@@ -14,11 +14,18 @@ def _lazy_grpc(*args, **kwargs):
     return execute_grpc(*args, **kwargs)
 
 
+def _lazy_async(*args, **kwargs):
+    """Lazy import to avoid requiring websockets unless used."""
+    from api_to_tools.executors.async_exec import execute_async
+    return execute_async(*args, **kwargs)
+
+
 EXECUTORS = {
     "rest": execute_rest,
     "soap": execute_soap,
     "graphql": execute_graphql,
     "grpc": _lazy_grpc,
+    "async": _lazy_async,
 }
 
 

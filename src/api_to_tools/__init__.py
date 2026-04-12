@@ -20,6 +20,7 @@ from api_to_tools.types import (
     Tool,
     ToolParameter,
 )
+from api_to_tools.codegen import generate_python_sdk, generate_typescript_sdk
 from api_to_tools.testing import generate_test_code, run_smoke_tests
 from api_to_tools.utils import (
     group_by_method,
@@ -46,6 +47,8 @@ __all__ = [
     "search_tools",
     "run_smoke_tests",
     "generate_test_code",
+    "generate_python_sdk",
+    "generate_typescript_sdk",
     "enable_debug_logging",
     "Tool",
     "ToolParameter",
