@@ -9,7 +9,8 @@ from api_to_tools.adapters.formats import (
     to_langchain_tools,
     to_vertex_ai_tools,
 )
-from api_to_tools.core import discover, execute, to_tools
+from api_to_tools.adapters.openapi_export import to_openapi_spec
+from api_to_tools.core import discover, discover_all, execute, to_tools
 from api_to_tools.types import (
     AuthConfig,
     DetectionResult,
@@ -28,6 +29,7 @@ from api_to_tools.utils import (
 
 __all__ = [
     "discover",
+    "discover_all",
     "to_tools",
     "execute",
     "to_function_calling",
@@ -36,6 +38,7 @@ __all__ = [
     "to_vertex_ai_tools",
     "to_bedrock_tools",
     "to_langchain_tools",
+    "to_openapi_spec",
     "group_by_tag",
     "group_by_method",
     "summarize",

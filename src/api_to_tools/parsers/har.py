@@ -24,6 +24,7 @@ from api_to_tools.parsers._param_builder import (
     infer_json_type,
     normalize_path_params,
     sanitize_name,
+    schema_from_value,
 )
 from api_to_tools.types import Tool, ToolParameter
 
@@ -231,23 +232,7 @@ def _infer_response_schema(entries: list[dict]) -> dict | None:
     return None
 
 
-def _schema_from_value(value, *, max_depth: int = 3) -> dict:
-    """Build a JSON Schema from an observed value."""
-    if max_depth <= 0:
-        return {"type": "object"}
-
-    if isinstance(value, dict):
-        properties = {}
-        for k, v in list(value.items())[:30]:
-            properties[k] = _schema_from_value(v, max_depth=max_depth - 1)
-        return {"type": "object", "properties": properties}
-
-    if isinstance(value, list):
-        if value:
-            return {"type": "array", "items": _schema_from_value(value[0], max_depth=max_depth - 1)}
-        return {"type": "array", "items": {"type": "object"}}
-
-    return {"type": infer_json_type(value)}
+_schema_from_value = schema_from_value
 
 
 def _build_tool_name(method: str, path: str) -> str:

@@ -31,6 +31,49 @@ def _split_kwargs(kwargs: dict[str, Any], keys: frozenset[str]) -> tuple[dict, d
     return matching, remaining
 
 
+def discover_all(
+    sources: list[str],
+    *,
+    auth: AuthConfig | None = None,
+    cache_ttl: float | None = None,
+    **kwargs: Any,
+) -> list[Tool]:
+    """Discover tools from multiple sources and merge them.
+
+    Merges tools from all sources, deduplicates by (endpoint, method),
+    and resolves name collisions.
+
+    Args:
+        sources: List of URLs, file paths (.har), or spec URLs.
+        auth: Shared auth config (applied to all sources).
+        cache_ttl: Cache TTL for each source.
+        **kwargs: Forwarded to discover().
+
+    Examples:
+        tools = discover_all([
+            "https://api.example.com/openapi.json",
+            "https://internal.example.com/api-docs",
+            "recording.har",
+        ])
+    """
+    all_tools: list[Tool] = []
+    seen: set[tuple[str, str]] = set()
+
+    for source in sources:
+        try:
+            tools = discover(source, auth=auth, cache_ttl=cache_ttl, **kwargs)
+            for tool in tools:
+                key = (tool.endpoint, tool.method)
+                if key not in seen:
+                    seen.add(key)
+                    all_tools.append(tool)
+        except Exception as e:
+            from api_to_tools._logging import get_logger
+            get_logger("core").warning("Failed to discover %s: %s", source, e)
+
+    return _deduplicate_names(all_tools)
+
+
 def discover(
     url: str,
     *,
@@ -218,6 +261,10 @@ def execute(
                 get_domain_limiter(domain, DEFAULT_EXECUTOR_RPS).acquire()
             result = executor(tool, args, auth=refreshed_auth)
 
+        # Auto-enrich response schema from successful responses
+        if 200 <= result.status < 300 and result.data and not tool.metadata.get("response_schema"):
+            _enrich_response_schema(tool, result.data)
+
         return result
     except Exception as e:
         return ExecutionResult(
@@ -225,3 +272,11 @@ def execute(
             data={"error": str(e), "type": type(e).__name__},
             raw=None,
         )
+
+
+def _enrich_response_schema(tool: Tool, data) -> None:
+    """Infer and store response schema from actual response data."""
+    if not isinstance(data, (dict, list)):
+        return
+    from api_to_tools.parsers._param_builder import schema_from_value
+    tool.metadata["response_schema"] = schema_from_value(data)

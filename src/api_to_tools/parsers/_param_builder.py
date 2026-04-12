@@ -155,3 +155,25 @@ def build_params_from_json_schema(
         ))
 
     return params
+
+
+def schema_from_value(value: Any, *, max_depth: int = 3) -> dict:
+    """Build a JSON Schema from an observed Python value.
+
+    Useful for inferring response schemas from actual API responses.
+    """
+    if max_depth <= 0:
+        return {"type": "object"}
+
+    if isinstance(value, dict):
+        properties = {}
+        for k, v in list(value.items())[:30]:
+            properties[k] = schema_from_value(v, max_depth=max_depth - 1)
+        return {"type": "object", "properties": properties}
+
+    if isinstance(value, list):
+        if value:
+            return {"type": "array", "items": schema_from_value(value[0], max_depth=max_depth - 1)}
+        return {"type": "array", "items": {"type": "object"}}
+
+    return {"type": infer_json_type(value)}

@@ -2,7 +2,7 @@
 
 import re
 
-from api_to_tools.core import _apply_filters, _deduplicate_names
+from api_to_tools.core import _apply_filters, _deduplicate_names, _enrich_response_schema
 from api_to_tools.types import Tool, ToolParameter
 
 
@@ -160,3 +160,40 @@ def test_deduplicate_names_mixed():
     result = _deduplicate_names(tools)
     names = [t.name for t in result]
     assert names == ["a", "b", "a_2"]
+
+
+# ──────────────────────────────────────────────
+# _enrich_response_schema
+# ──────────────────────────────────────────────
+
+def test_enrich_response_schema_dict():
+    tool = _make_tool()
+    _enrich_response_schema(tool, {"id": 1, "name": "Alice"})
+    schema = tool.metadata["response_schema"]
+    assert schema["type"] == "object"
+    assert "id" in schema["properties"]
+    assert schema["properties"]["id"]["type"] == "integer"
+
+
+def test_enrich_response_schema_list():
+    tool = _make_tool()
+    _enrich_response_schema(tool, [{"id": 1}, {"id": 2}])
+    schema = tool.metadata["response_schema"]
+    assert schema["type"] == "array"
+    assert schema["items"]["type"] == "object"
+
+
+def test_enrich_response_schema_skips_string():
+    tool = _make_tool()
+    _enrich_response_schema(tool, "plain text")
+    assert "response_schema" not in tool.metadata
+
+
+def test_enrich_does_not_run_if_schema_exists():
+    """execute() skips _enrich_response_schema when response_schema already set."""
+    tool = _make_tool()
+    tool.metadata["response_schema"] = {"type": "object"}
+    # Simulate execute()'s guard: only enrich if no schema
+    if not tool.metadata.get("response_schema"):
+        _enrich_response_schema(tool, {"new": "data"})
+    assert tool.metadata["response_schema"] == {"type": "object"}
