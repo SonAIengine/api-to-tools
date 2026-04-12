@@ -203,7 +203,7 @@ def generate_test_code(
         "",
         "from api_to_tools import execute, AuthConfig",
         "",
-        f"# Configure auth (fill in your credentials)",
+        "# Configure auth (fill in your credentials)",
         f"{auth_var} = None  # e.g. AuthConfig(type='bearer', token='...')",
         "",
     ]
@@ -225,24 +225,24 @@ def generate_test_code(
         lines.append(f'    """{tool.method} {tool.endpoint}"""')
 
         # Build tool reference
-        lines.append(f"    from api_to_tools.types import Tool, ToolParameter")
-        lines.append(f"    tool = Tool(")
+        lines.append("    from api_to_tools.types import Tool, ToolParameter")
+        lines.append("    tool = Tool(")
         lines.append(f'        name="{tool.name}",')
         lines.append(f'        description="""{tool.description}""",')
-        lines.append(f"        parameters=[],  # simplified")
+        lines.append("        parameters=[],  # simplified")
         lines.append(f'        endpoint="{tool.endpoint}",')
         lines.append(f'        method="{tool.method}",')
         lines.append(f'        protocol="{tool.protocol}",')
-        lines.append(f"    )")
+        lines.append("    )")
 
         lines.append(f"    args = {args_str}")
         lines.append(f"    result = execute(tool, args, auth={auth_var})")
 
         if is_safe:
-            lines.append(f"    assert 200 <= result.status < 400, f'{{result.status}}: {{result.data}}'")
+            lines.append("    assert 200 <= result.status < 400, f'{result.status}: {result.data}'")
         else:
-            lines.append(f"    # Mutation — verify status but be cautious")
-            lines.append(f"    assert result.status < 500, f'Server error: {{result.status}}: {{result.data}}'")
+            lines.append("    # Mutation — verify status but be cautious")
+            lines.append("    assert result.status < 500, f'Server error: {result.status}: {result.data}'")
 
         lines.append("")
 

@@ -2,7 +2,6 @@
 
 import time
 import threading
-from unittest.mock import patch
 
 from api_to_tools.cache import TTLCache
 

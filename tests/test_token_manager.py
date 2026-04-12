@@ -1,9 +1,8 @@
 """Tests for TokenManager — token lifecycle, expiry, refresh."""
 
-import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from api_to_tools.auth import TokenManager, _EXPIRY_BUFFER_SECONDS
+from api_to_tools.auth import TokenManager
 from api_to_tools.types import AuthConfig
 
 

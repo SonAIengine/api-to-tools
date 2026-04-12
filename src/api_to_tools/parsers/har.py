@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from api_to_tools._logging import get_logger
 from api_to_tools.parsers._param_builder import (
-    build_param_from_value,
     extract_tag_from_path,
     infer_json_type,
     normalize_path_params,

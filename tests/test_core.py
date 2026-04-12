@@ -1,9 +1,8 @@
 """Tests for core.py — _apply_filters, _deduplicate_names (pure functions)."""
 
-import re
 
 from api_to_tools.core import _apply_filters, _deduplicate_names, _enrich_response_schema
-from api_to_tools.types import Tool, ToolParameter
+from api_to_tools.types import Tool
 
 
 def _make_tool(name="get_users", method="GET", endpoint="https://api.example.com/api/v1/users", tags=None):

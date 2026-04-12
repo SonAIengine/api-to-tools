@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from api_to_tools.parsers.har import (
     _build_tool_name,
