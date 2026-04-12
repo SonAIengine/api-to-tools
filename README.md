@@ -27,6 +27,10 @@ tools = discover(
 )
 # → 1090 tools (includes path parameters like {stdCtgNo}, body DTOs, enum values)
 
+# Browser network recording (no Swagger at all)
+tools = discover("recording.har")
+# → Tools inferred from actual HTTP traffic
+
 # Korean legacy enterprise (Nexacro/SSV, no Swagger at all)
 tools = discover(
     "https://pro.example.com/",
@@ -57,16 +61,18 @@ Requires Python 3.10+.
 
 | Source | Status | Notes |
 |--------|:------:|-------|
-| OpenAPI 3.0 / 3.1 | ✅ | Full body DTO, enum, response schema extraction |
-| Swagger 2.0 (legacy) | ✅ | `parameters[].in=body`, `responses.200.schema` |
+| OpenAPI 3.0 / 3.1 | ✅ | Full body DTO, enum, response schema, security scheme extraction |
+| Swagger 2.0 (legacy) | ✅ | `parameters[].in=body`, `responses.200.schema`, `securityDefinitions` |
 | WSDL / SOAP | ✅ | zeep-based, input/output schemas |
 | GraphQL | ✅ | Introspection, selection set auto-build |
-| gRPC / Protobuf | ✅ | `.proto` file parsing, streaming detection |
-| AsyncAPI 3.0 | ✅ | WebSocket / MQTT operations |
+| gRPC / Protobuf | ✅ | `.proto` file parsing, streaming detection, executor with reflection |
+| AsyncAPI 2.x / 3.x | ✅ | WebSocket, MQTT, Kafka, AMQP channels → Tools |
+| HAR files | ✅ | Browser DevTools network recordings → Tools with inferred schemas |
 | Authenticated Swagger | ✅ | Login → guess backend → Bearer probe |
 | Nexacro / SSV | ✅ | Korean enterprise legacy (Lotte, 금융권 등) |
 | JS bundle scanning | ✅ | Static analysis when no spec exists |
 | Playwright crawler | ✅ | Dynamic SPA discovery with safe mode |
+| CDP crawler | ✅ | Chrome DevTools Protocol (no Playwright needed) |
 
 ---
 
@@ -76,7 +82,7 @@ Requires Python 3.10+.
 works:
 
 ```
-1. Direct spec URL (OpenAPI, WSDL, GraphQL)
+1. Direct spec URL (OpenAPI, WSDL, GraphQL, HAR, AsyncAPI)
 2. Nexacro platform detection  → Nexacro crawler + SSV parser
 3. Well-known paths probe     → /openapi.json, /swagger.json, /api-docs, ...
 4. Authenticated Swagger      → login → guess backend → Bearer probe
@@ -152,6 +158,33 @@ result = execute(tool, {"year": "2026", "countryCode": "KR"})
 print(result.data)  # → list of 15 holidays
 ```
 
+### HAR file parsing
+
+```python
+# Export HAR from browser DevTools → Network → Export HAR
+tools = discover("recording.har")
+
+# Or parse directly
+from api_to_tools.parsers.har import parse_har
+tools = parse_har("recording.har")
+```
+
+Parameters, response schemas, and types are automatically inferred from
+observed request/response pairs. Duplicate calls to the same endpoint are
+merged, and path parameters (numeric IDs, UUIDs) are normalized to placeholders.
+
+### Caching
+
+```python
+# Cache discovery results for 5 minutes
+tools = discover("https://api.example.com/docs", cache_ttl=300)
+tools = discover("https://api.example.com/docs", cache_ttl=300)  # instant cache hit
+
+# Manual invalidation
+from api_to_tools.cache import get_discover_cache
+get_discover_cache().invalidate("https://api.example.com/docs")
+```
+
 ### Authentication
 
 ```python
@@ -167,16 +200,54 @@ AuthConfig(type="api_key", key="X-API-Key", value="abc", location="header")
 # Form login → session cookie
 AuthConfig(type="cookie", username="user", password="pass")
 
-# OAuth2 client credentials
+# OAuth2 client credentials (auto-renewal on expiry)
 AuthConfig(
     type="oauth2_client",
     token_url="https://auth.example.com/token",
     client_id="id",
     client_secret="secret",
+    scope="read write",
+)
+
+# OAuth2 with refresh token
+AuthConfig(
+    type="oauth2_client",
+    token_url="https://auth.example.com/token",
+    client_id="id",
+    client_secret="secret",
+    refresh_token="rt_...",
 )
 
 # Custom headers
 AuthConfig(type="custom", headers={"Authorization": "Custom xyz"})
+
+# Disable TLS verification (self-signed certs)
+AuthConfig(type="bearer", token="...", verify_ssl=False)
+```
+
+OAuth2 tokens are automatically refreshed before expiry. On 401 responses,
+`execute()` refreshes the token and retries once.
+
+### OpenAPI security scheme extraction
+
+```python
+from api_to_tools.parsers.openapi import (
+    extract_security_schemes,
+    security_schemes_to_auth_configs,
+)
+
+# Get raw scheme info
+schemes = extract_security_schemes(spec)
+# [{"type": "bearer", "_scheme_name": "bearerAuth", ...}, ...]
+
+# Convert to AuthConfig objects
+configs = security_schemes_to_auth_configs(spec)
+# [AuthConfig(type="api_key", key="X-API-Key", ...), ...]
+
+# Per-tool security info is in metadata
+tools = discover("https://api.example.com/docs")
+tool.metadata.get("security_schemes")
+# [{"type": "oauth2_client", "token_url": "...", ...}]
 ```
 
 ### Filters
@@ -211,7 +282,7 @@ from api_to_tools import to_function_calling
 openai_tools = to_function_calling(tools)
 
 # MCP server (stdio)
-from api_to_tools.adapters import create_mcp_server
+from api_to_tools.adapters.mcp_adapter import create_mcp_server
 server = create_mcp_server(tools, name="my-api")
 server.run(transport="stdio")
 ```
@@ -246,27 +317,45 @@ auth endpoints) to pass through, since they're common in RPC-style APIs.
 
 ---
 
+## Rate limiting
+
+All outgoing requests are rate-limited per domain to prevent overwhelming
+target servers:
+
+- **Discovery probing**: 20 requests/second (configurable via `DEFAULT_PROBE_RPS`)
+- **API execution**: 10 requests/second (configurable via `DEFAULT_EXECUTOR_RPS`)
+
+Rate limiting is automatic and requires no configuration.
+
+---
+
 ## Architecture
 
 ```
 api_to_tools/
 ├── core.py              # discover, to_tools, execute
-├── types.py             # Tool, ToolParameter, AuthConfig, …
-├── constants.py         # Timeouts, well-known paths, keywords
-├── auth.py              # Auth config → HTTP headers/cookies
+├── types.py             # Tool, ToolParameter, AuthConfig, ExecutionResult, …
+├── constants.py         # Timeouts, rate limits, well-known paths
+├── auth.py              # Auth config → HTTP headers/cookies, TokenManager
+├── cache.py             # TTL-based discover() result cache
+├── rate_limiter.py      # Per-domain token bucket rate limiter
 │
 ├── detector/
 │   ├── __init__.py            # Spec type detection, parallel probing
 │   └── swagger_discovery.py   # Authenticated backend Swagger hunting
 │
 ├── parsers/
-│   ├── openapi.py       # OpenAPI 3.x + Swagger 2.0
+│   ├── openapi.py       # OpenAPI 3.x + Swagger 2.0 + security schemes
+│   ├── asyncapi.py      # AsyncAPI 2.x / 3.x
+│   ├── har.py           # HAR file parser (browser recordings)
 │   ├── wsdl.py          # WSDL/SOAP via zeep
 │   ├── graphql.py       # GraphQL introspection
 │   ├── grpc.py          # .proto parsing
 │   ├── ssv.py           # Nexacro SSV format
 │   ├── nexacro.py       # Nexacro-specific crawler
 │   ├── crawler.py       # Generic Playwright crawler
+│   ├── cdp_crawler.py   # Chrome DevTools Protocol crawler
+│   ├── static_spa.py    # Browserless JS bundle analysis
 │   ├── jsbundle.py      # Static JS bundle scanner
 │   ├── _param_builder.py  # Shared ToolParameter helpers
 │   └── _browser_utils.py  # Shared Playwright helpers
@@ -274,7 +363,8 @@ api_to_tools/
 ├── executors/
 │   ├── rest.py          # REST + Nexacro SSV execution
 │   ├── soap.py          # SOAP calls via zeep
-│   └── graphql.py       # GraphQL query execution
+│   ├── graphql.py       # GraphQL query execution
+│   └── grpc_exec.py     # gRPC execution (reflection + JSON fallback)
 │
 └── adapters/
     ├── formats.py       # OpenAI / Anthropic tool format
@@ -290,7 +380,7 @@ git clone https://github.com/SonAIengine/api-to-tools.git
 cd api-to-tools
 pip install -e '.[dev]'
 
-pytest              # 89 unit tests
+pytest              # 289 unit tests
 ```
 
 ### Debug logging
