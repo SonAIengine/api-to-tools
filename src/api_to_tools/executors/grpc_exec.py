@@ -57,7 +57,7 @@ def _try_reflection_call(
     """Attempt to call via gRPC reflection (fully typed protobuf)."""
     try:
         from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
-        from google.protobuf import descriptor_pool, descriptor_pb2, symbol_database
+        from google.protobuf import descriptor_pool, descriptor_pb2
         from google.protobuf.json_format import MessageToDict, ParseDict
     except ImportError:
         return None
@@ -97,7 +97,6 @@ def _try_reflection_call(
         method_desc = svc_desc.FindMethodByName(method_name)
 
         # Get message types
-        db = symbol_database.Default()
         req_desc = pool.FindMessageTypeByName(method_desc.input_type.full_name)
         resp_desc = pool.FindMessageTypeByName(method_desc.output_type.full_name)
 
@@ -110,7 +109,6 @@ def _try_reflection_call(
         request = ParseDict(args, req_class())
 
         # Make the call
-        import grpc
         full_path = f"/{service_name}/{method_name}"
         response_bytes = channel.unary_unary(
             full_path,

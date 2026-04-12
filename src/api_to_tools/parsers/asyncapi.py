@@ -13,7 +13,6 @@ Supports:
 from __future__ import annotations
 
 import json
-from urllib.parse import urlparse
 
 import httpx
 import yaml

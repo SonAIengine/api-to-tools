@@ -29,7 +29,6 @@ def parse_grpc(input_data: str | dict, source_url: str | None = None) -> list[To
     input_data: path to .proto file or raw proto content string
     """
     from google.protobuf import descriptor_pb2
-    from google.protobuf.compiler import plugin_pb2
 
     proto_path: Path
     if isinstance(input_data, str) and (input_data.endswith(".proto") or Path(input_data).exists()):

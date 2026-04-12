@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from api_to_tools.types import SpecType, Tool
+from api_to_tools.types import SpecType
 from api_to_tools.parsers.asyncapi import parse_asyncapi
 from api_to_tools.parsers.openapi import parse_openapi
 from api_to_tools.parsers.wsdl import parse_wsdl

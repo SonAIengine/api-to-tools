@@ -7,7 +7,6 @@ other sources that don't have a formal spec.
 from __future__ import annotations
 
 import json
-from collections import defaultdict
 from urllib.parse import urlparse
 
 from api_to_tools.adapters.formats import _to_json_schema_type

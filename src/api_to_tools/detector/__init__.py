@@ -9,7 +9,6 @@ import httpx
 
 from api_to_tools._logging import get_logger
 from api_to_tools.constants import (
-    DEFAULT_HTTP_TIMEOUT,
     DEFAULT_PROBE_RPS,
     NEXACRO_HTML_SIGNATURES,
     WELL_KNOWN_PATHS as _WELL_KNOWN_PATHS_RAW,
