@@ -3,10 +3,11 @@
 Universal library that converts **any API into LLM-callable tool definitions**.
 
 Give it a website URL (with or without credentials) and it returns a list of
-Tools that can be handed directly to Claude, OpenAI, or an MCP server — no
+Tools that can be handed directly to Claude, OpenAI, Gemini, or an MCP server — no
 manual tool wiring required.
 
 [![PyPI](https://img.shields.io/pypi/v/api-to-tools.svg)](https://pypi.org/project/api-to-tools/)
+[![CI](https://github.com/SonAIengine/api-to-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/SonAIengine/api-to-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -14,29 +15,29 @@ manual tool wiring required.
 ## What it does
 
 ```python
-from api_to_tools import discover, AuthConfig
+from api_to_tools import discover, discover_all, AuthConfig
 
 # Public OpenAPI / Swagger site
 tools = discover("https://petstore.swagger.io")
 # → 20 tools
+
+# Browser network recording (no Swagger at all)
+tools = discover("recording.har")
+# → Tools inferred from actual HTTP traffic
+
+# Multiple sources merged
+tools = discover_all([
+    "https://api.example.com/openapi.json",
+    "https://internal.example.com/api-docs",
+    "recording.har",
+])
 
 # Private admin panel (login → auto-discover backend Swagger)
 tools = discover(
     "https://admin.example.com/",
     auth=AuthConfig(type="cookie", username="admin", password="admin"),
 )
-# → 1090 tools (includes path parameters like {stdCtgNo}, body DTOs, enum values)
-
-# Browser network recording (no Swagger at all)
-tools = discover("recording.har")
-# → Tools inferred from actual HTTP traffic
-
-# Korean legacy enterprise (Nexacro/SSV, no Swagger at all)
-tools = discover(
-    "https://pro.example.com/",
-    auth=AuthConfig(type="cookie", username="user", password="pass"),
-)
-# → Playwright crawler + SSV parser
+# → 1090 tools
 ```
 
 One function call, one URL, one account — you get a complete tool catalog.
@@ -48,9 +49,10 @@ One function call, one URL, one account — you get a complete tool catalog.
 ```bash
 pip install api-to-tools
 
-# Optional: browser-based crawling for sites without a Swagger spec
-pip install 'api-to-tools[crawler]'
-python -m playwright install chromium
+# Optional extras
+pip install 'api-to-tools[crawler]'     # Playwright browser crawling
+pip install 'api-to-tools[websocket]'   # WebSocket/SSE executor
+python -m playwright install chromium   # for crawler
 ```
 
 Requires Python 3.10+.
@@ -68,6 +70,7 @@ Requires Python 3.10+.
 | gRPC / Protobuf | ✅ | `.proto` file parsing, streaming detection, executor with reflection |
 | AsyncAPI 2.x / 3.x | ✅ | WebSocket, MQTT, Kafka, AMQP channels → Tools |
 | HAR files | ✅ | Browser DevTools network recordings → Tools with inferred schemas |
+| Traffic proxy | ✅ | Built-in HTTP proxy → auto-record → Tools |
 | Authenticated Swagger | ✅ | Login → guess backend → Bearer probe |
 | Nexacro / SSV | ✅ | Korean enterprise legacy (Lotte, 금융권 등) |
 | JS bundle scanning | ✅ | Static analysis when no spec exists |
@@ -158,6 +161,19 @@ result = execute(tool, {"year": "2026", "countryCode": "KR"})
 print(result.data)  # → list of 15 holidays
 ```
 
+### Multiple sources
+
+```python
+from api_to_tools import discover_all
+
+tools = discover_all([
+    "https://api.example.com/openapi.json",
+    "https://internal.example.com/api-docs",
+    "recording.har",
+])
+# Merges tools, deduplicates by (endpoint, method), resolves name collisions
+```
+
 ### HAR file parsing
 
 ```python
@@ -169,9 +185,23 @@ from api_to_tools.parsers.har import parse_har
 tools = parse_har("recording.har")
 ```
 
-Parameters, response schemas, and types are automatically inferred from
-observed request/response pairs. Duplicate calls to the same endpoint are
-merged, and path parameters (numeric IDs, UUIDs) are normalized to placeholders.
+### Traffic proxy capture
+
+```python
+from api_to_tools.proxy import TrafficRecorder
+
+# Start proxy, browse the site, stop → Tools
+with TrafficRecorder(port=8080, target_host="api.example.com") as recorder:
+    print("Configure browser proxy to http://localhost:8080")
+    input("Press Enter when done browsing...")
+
+tools = recorder.to_tools()
+recorder.save_har("captured.har")  # save for later
+
+# Or quick capture for a fixed duration
+from api_to_tools.proxy import capture_traffic
+tools = capture_traffic(port=8080, duration=60, target_host="api.example.com")
+```
 
 ### Caching
 
@@ -228,26 +258,88 @@ AuthConfig(type="bearer", token="...", verify_ssl=False)
 OAuth2 tokens are automatically refreshed before expiry. On 401 responses,
 `execute()` refreshes the token and retries once.
 
-### OpenAPI security scheme extraction
+### LLM integration
 
 ```python
-from api_to_tools.parsers.openapi import (
-    extract_security_schemes,
-    security_schemes_to_auth_configs,
+# Claude / Anthropic
+from api_to_tools import to_anthropic_tools
+response = client.messages.create(
+    model="claude-sonnet-4-5",
+    tools=to_anthropic_tools(tools),
+    messages=[...],
 )
 
-# Get raw scheme info
-schemes = extract_security_schemes(spec)
-# [{"type": "bearer", "_scheme_name": "bearerAuth", ...}, ...]
+# OpenAI function calling
+from api_to_tools import to_function_calling
+openai_tools = to_function_calling(tools)
 
-# Convert to AuthConfig objects
-configs = security_schemes_to_auth_configs(spec)
-# [AuthConfig(type="api_key", key="X-API-Key", ...), ...]
+# Google Gemini / Vertex AI
+from api_to_tools import to_gemini_tools
+gemini_tools = to_gemini_tools(tools)
 
-# Per-tool security info is in metadata
-tools = discover("https://api.example.com/docs")
-tool.metadata.get("security_schemes")
-# [{"type": "oauth2_client", "token_url": "...", ...}]
+# AWS Bedrock
+from api_to_tools import to_bedrock_tools
+bedrock_tools = to_bedrock_tools(tools)
+
+# LangChain
+from api_to_tools import to_langchain_tools
+lc_tools = to_langchain_tools(tools)
+
+# MCP server (stdio)
+from api_to_tools.adapters.mcp_adapter import create_mcp_server
+server = create_mcp_server(tools, name="my-api")
+server.run(transport="stdio")
+```
+
+### OpenAPI spec export
+
+```python
+from api_to_tools import to_openapi_spec
+
+# Generate OpenAPI 3.0 spec from discovered tools
+spec = to_openapi_spec(tools, title="My API", version="1.0.0")
+
+# Save as JSON
+from api_to_tools.adapters.openapi_export import to_openapi_json
+with open("openapi.json", "w") as f:
+    f.write(to_openapi_json(tools, title="My API"))
+```
+
+### SDK code generation
+
+```python
+from api_to_tools import generate_python_sdk, generate_typescript_sdk
+
+# Generate typed Python client
+code = generate_python_sdk(tools, class_name="PetStoreClient")
+with open("petstore_client.py", "w") as f:
+    f.write(code)
+
+# Generate TypeScript client
+ts_code = generate_typescript_sdk(tools, class_name="PetStoreClient")
+with open("petstore_client.ts", "w") as f:
+    f.write(ts_code)
+```
+
+### Smoke testing
+
+```python
+from api_to_tools import run_smoke_tests, generate_test_code
+
+# Run smoke tests (GET only by default)
+report = run_smoke_tests(tools, auth=auth)
+print(report.summary)  # "15 passed, 2 failed, 8 skipped / 25 total"
+
+# Include mutations (POST/PUT/DELETE)
+report = run_smoke_tests(tools, include_mutations=True)
+
+# Dry run (no network calls)
+report = run_smoke_tests(tools, dry_run=True)
+
+# Generate pytest file
+code = generate_test_code(tools)
+with open("test_api_smoke.py", "w") as f:
+    f.write(code)
 ```
 
 ### Filters
@@ -261,30 +353,6 @@ tools = discover(
     path_filter=r"/api/v2/.*",            # regex on endpoint
     base_url="https://prod.example.com",  # override base URL
 )
-```
-
-### LLM integration
-
-```python
-# Claude / Anthropic
-from api_to_tools import to_anthropic_tools
-import anthropic
-
-client = anthropic.Anthropic()
-response = client.messages.create(
-    model="claude-sonnet-4-5",
-    tools=to_anthropic_tools(tools),
-    messages=[{"role": "user", "content": "Find orders from last week"}],
-)
-
-# OpenAI function calling
-from api_to_tools import to_function_calling
-openai_tools = to_function_calling(tools)
-
-# MCP server (stdio)
-from api_to_tools.adapters.mcp_adapter import create_mcp_server
-server = create_mcp_server(tools, name="my-api")
-server.run(transport="stdio")
 ```
 
 ### Utilities
@@ -322,8 +390,8 @@ auth endpoints) to pass through, since they're common in RPC-style APIs.
 All outgoing requests are rate-limited per domain to prevent overwhelming
 target servers:
 
-- **Discovery probing**: 20 requests/second (configurable via `DEFAULT_PROBE_RPS`)
-- **API execution**: 10 requests/second (configurable via `DEFAULT_EXECUTOR_RPS`)
+- **Discovery probing**: 20 requests/second
+- **API execution**: 10 requests/second
 
 Rate limiting is automatic and requires no configuration.
 
@@ -333,12 +401,15 @@ Rate limiting is automatic and requires no configuration.
 
 ```
 api_to_tools/
-├── core.py              # discover, to_tools, execute
+├── core.py              # discover, discover_all, to_tools, execute
 ├── types.py             # Tool, ToolParameter, AuthConfig, ExecutionResult, …
 ├── constants.py         # Timeouts, rate limits, well-known paths
 ├── auth.py              # Auth config → HTTP headers/cookies, TokenManager
 ├── cache.py             # TTL-based discover() result cache
 ├── rate_limiter.py      # Per-domain token bucket rate limiter
+├── testing.py           # Smoke test runner + pytest code generator
+├── codegen.py           # Python / TypeScript SDK code generator
+├── proxy.py             # HTTP traffic capture proxy → HAR → Tools
 │
 ├── detector/
 │   ├── __init__.py            # Spec type detection, parallel probing
@@ -363,12 +434,14 @@ api_to_tools/
 ├── executors/
 │   ├── rest.py          # REST + Nexacro SSV execution
 │   ├── soap.py          # SOAP calls via zeep
-│   ├── graphql.py       # GraphQL query execution
-│   └── grpc_exec.py     # gRPC execution (reflection + JSON fallback)
+│   ���── graphql.py       # GraphQL query execution
+│   ├── grpc_exec.py     # gRPC execution (reflection + JSON fallback)
+│   └── async_exec.py    # WebSocket / SSE execution
 │
 └── adapters/
-    ├── formats.py       # OpenAI / Anthropic tool format
-    └── mcp_adapter.py   # MCP server generation
+    ├── formats.py         # OpenAI / Anthropic / Gemini / Bedrock / LangChain
+    ├── openapi_export.py  # Tool → OpenAPI 3.0 spec (reverse export)
+    └── mcp_adapter.py     # MCP server generation
 ```
 
 ---
@@ -380,7 +453,8 @@ git clone https://github.com/SonAIengine/api-to-tools.git
 cd api-to-tools
 pip install -e '.[dev]'
 
-pytest              # 289 unit tests
+pytest              # 350 unit tests
+ruff check src/     # lint
 ```
 
 ### Debug logging
