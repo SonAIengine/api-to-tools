@@ -1,8 +1,8 @@
-"""Tests for core.py — _apply_filters (pure function)."""
+"""Tests for core.py — _apply_filters, _deduplicate_names (pure functions)."""
 
 import re
 
-from api_to_tools.core import _apply_filters
+from api_to_tools.core import _apply_filters, _deduplicate_names
 from api_to_tools.types import Tool, ToolParameter
 
 
@@ -126,3 +126,37 @@ def test_apply_filters_empty_kwargs():
     tools = [_make_tool(), _make_tool(name="b")]
     result = _apply_filters(tools, {})
     assert len(result) == 2
+
+
+def test_apply_filters_base_url_does_not_mutate_original():
+    tools = [_make_tool(endpoint="https://old.example.com/api/v1/users")]
+    original_endpoint = tools[0].endpoint
+    _apply_filters(tools, {"base_url": "https://new.example.com"})
+    assert tools[0].endpoint == original_endpoint
+
+
+# ──────────────────────────────────────────────
+# _deduplicate_names
+# ──────────────────────────────────────────────
+
+def test_deduplicate_names_no_dupes():
+    tools = [_make_tool(name="a"), _make_tool(name="b")]
+    result = _deduplicate_names(tools)
+    assert [t.name for t in result] == ["a", "b"]
+
+
+def test_deduplicate_names_with_dupes():
+    tools = [_make_tool(name="getUser"), _make_tool(name="getUser"), _make_tool(name="getUser")]
+    result = _deduplicate_names(tools)
+    names = [t.name for t in result]
+    assert len(set(names)) == 3
+    assert names[0] == "getUser"
+    assert names[1] == "getUser_2"
+    assert names[2] == "getUser_3"
+
+
+def test_deduplicate_names_mixed():
+    tools = [_make_tool(name="a"), _make_tool(name="b"), _make_tool(name="a")]
+    result = _deduplicate_names(tools)
+    names = [t.name for t in result]
+    assert names == ["a", "b", "a_2"]

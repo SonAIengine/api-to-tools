@@ -69,3 +69,107 @@ def to_anthropic_tools(tools: list[Tool]) -> list[dict]:
         }
         for tool in tools
     ]
+
+
+def to_gemini_tools(tools: list[Tool]) -> list[dict]:
+    """Convert to Google Gemini / Vertex AI function calling format.
+
+    Returns a list of FunctionDeclaration dicts wrapped in a single Tool object,
+    matching the Gemini API's `tools` parameter structure.
+    """
+    declarations = []
+    for tool in tools:
+        properties = {}
+        required = []
+        for p in tool.parameters:
+            prop = _to_json_schema_type(p.type)
+            if p.description:
+                prop["description"] = p.description
+            if p.enum:
+                prop["enum"] = p.enum
+            properties[p.name] = prop
+            if p.required:
+                required.append(p.name)
+
+        decl: dict = {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+            },
+        }
+        if required:
+            decl["parameters"]["required"] = required
+        declarations.append(decl)
+
+    return [{"function_declarations": declarations}]
+
+
+# Alias: Vertex AI uses the same format as Gemini
+to_vertex_ai_tools = to_gemini_tools
+
+
+def to_bedrock_tools(tools: list[Tool]) -> list[dict]:
+    """Convert to AWS Bedrock Converse API toolConfig format.
+
+    Returns a list of tool specs matching Bedrock's `toolConfig.tools` structure.
+    """
+    return [
+        {
+            "toolSpec": {
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            p.name: _param_schema(p) for p in tool.parameters
+                        },
+                        "required": [p.name for p in tool.parameters if p.required],
+                    },
+                },
+            },
+        }
+        for tool in tools
+    ]
+
+
+def to_langchain_tools(tools: list[Tool]) -> list[dict]:
+    """Convert to LangChain-compatible tool schema format.
+
+    Returns dicts that can be used with `StructuredTool.from_function()` or
+    passed to `ChatModel.bind_tools()`.
+    """
+    result = []
+    for tool in tools:
+        properties = {}
+        required = []
+        for p in tool.parameters:
+            prop = _to_json_schema_type(p.type)
+            if p.description:
+                prop["description"] = p.description
+            if p.enum:
+                prop["enum"] = p.enum
+            properties[p.name] = prop
+            if p.required:
+                required.append(p.name)
+
+        schema: dict = {
+            "title": tool.name,
+            "description": tool.description,
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema["required"] = required
+
+        result.append({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": schema,
+            },
+        })
+    return result

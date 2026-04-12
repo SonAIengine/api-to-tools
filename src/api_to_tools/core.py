@@ -85,6 +85,9 @@ def to_tools(
     parser = get_parser(detection.type)
     tools = _run_parser(parser, detection, auth, kwargs)
 
+    # Deduplicate tool names
+    tools = _deduplicate_names(tools)
+
     # Store auth in tool metadata so execute() can use it later
     if auth:
         auth_dict = asdict(auth)
@@ -92,6 +95,19 @@ def to_tools(
             t.metadata["auth"] = auth_dict
 
     return _apply_filters(tools, kwargs)
+
+
+def _deduplicate_names(tools: list[Tool]) -> list[Tool]:
+    """Ensure all tool names are unique by appending _2, _3, etc. to duplicates."""
+    seen: dict[str, int] = {}
+    for tool in tools:
+        name = tool.name
+        if name in seen:
+            seen[name] += 1
+            tool.name = f"{name}_{seen[name]}"
+        else:
+            seen[name] = 1
+    return tools
 
 
 def _run_parser(

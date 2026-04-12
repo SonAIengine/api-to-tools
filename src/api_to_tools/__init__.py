@@ -1,7 +1,14 @@
 """Universal API-to-LLM-tools converter."""
 
 from api_to_tools._logging import enable_debug_logging
-from api_to_tools.adapters.formats import to_anthropic_tools, to_function_calling
+from api_to_tools.adapters.formats import (
+    to_anthropic_tools,
+    to_bedrock_tools,
+    to_function_calling,
+    to_gemini_tools,
+    to_langchain_tools,
+    to_vertex_ai_tools,
+)
 from api_to_tools.core import discover, execute, to_tools
 from api_to_tools.types import (
     AuthConfig,
@@ -25,6 +32,10 @@ __all__ = [
     "execute",
     "to_function_calling",
     "to_anthropic_tools",
+    "to_gemini_tools",
+    "to_vertex_ai_tools",
+    "to_bedrock_tools",
+    "to_langchain_tools",
     "group_by_tag",
     "group_by_method",
     "summarize",

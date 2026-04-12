@@ -1,6 +1,7 @@
 """Tests for OpenAPI security scheme extraction."""
 
 from api_to_tools.parsers.openapi import (
+    _resolve_server_variables,
     extract_security_schemes,
     security_schemes_to_auth_configs,
     parse_openapi,
@@ -215,3 +216,59 @@ def test_parse_openapi_empty_security_schemes():
     }
     tools = parse_openapi(spec)
     assert "security_schemes" not in tools[0].metadata
+
+
+# ──────────────────────────────────────────────
+# Server variable template resolution
+# ──────────────────────────────────────────────
+
+def test_resolve_server_variables_basic():
+    url = "https://{environment}.example.com/api/{version}"
+    server = {
+        "url": url,
+        "variables": {
+            "environment": {"default": "prod"},
+            "version": {"default": "v2"},
+        },
+    }
+    result = _resolve_server_variables(url, server)
+    assert result == "https://prod.example.com/api/v2"
+
+
+def test_resolve_server_variables_no_variables():
+    url = "https://api.example.com"
+    result = _resolve_server_variables(url, {"url": url})
+    assert result == url
+
+
+def test_resolve_server_variables_empty_default():
+    url = "https://{host}/api"
+    server = {"url": url, "variables": {"host": {"default": ""}}}
+    result = _resolve_server_variables(url, server)
+    assert result == "https:///api"
+
+
+def test_parse_openapi_with_server_variables():
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "Test", "version": "1.0.0"},
+        "servers": [
+            {
+                "url": "https://{env}.example.com/{basePath}",
+                "variables": {
+                    "env": {"default": "api", "enum": ["api", "staging"]},
+                    "basePath": {"default": "v2"},
+                },
+            },
+        ],
+        "paths": {
+            "/users": {
+                "get": {
+                    "operationId": "listUsers",
+                    "responses": {"200": {"description": "OK"}},
+                },
+            },
+        },
+    }
+    tools = parse_openapi(spec)
+    assert tools[0].endpoint == "https://api.example.com/v2/users"

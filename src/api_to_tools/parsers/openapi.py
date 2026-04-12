@@ -449,10 +449,22 @@ def security_schemes_to_auth_configs(spec: dict) -> list[AuthConfig]:
 # Utilities
 # ──────────────────────────────────────────────
 
+def _resolve_server_variables(url: str, server: dict) -> str:
+    """Replace {variable} placeholders in a server URL with their default values."""
+    variables = server.get("variables", {})
+    for var_name, var_obj in variables.items():
+        if isinstance(var_obj, dict):
+            default = var_obj.get("default", "")
+            url = url.replace(f"{{{var_name}}}", str(default))
+    return url
+
+
 def _get_base_url(spec: dict, source_url: str | None = None) -> str:
     servers = spec.get("servers", [])
     if servers:
-        server_url = servers[0].get("url", "")
+        server = servers[0]
+        server_url = server.get("url", "")
+        server_url = _resolve_server_variables(server_url, server)
         if server_url.startswith("/") and source_url:
             parsed = urlparse(source_url)
             return f"{parsed.scheme}://{parsed.netloc}{server_url}"

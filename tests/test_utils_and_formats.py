@@ -1,6 +1,13 @@
 """Tests for utilities and LLM format converters."""
 
-from api_to_tools.adapters.formats import to_anthropic_tools, to_function_calling
+from api_to_tools.adapters.formats import (
+    to_anthropic_tools,
+    to_bedrock_tools,
+    to_function_calling,
+    to_gemini_tools,
+    to_langchain_tools,
+    to_vertex_ai_tools,
+)
 from api_to_tools.types import Tool, ToolParameter
 from api_to_tools.utils import (
     group_by_method,
@@ -141,3 +148,58 @@ def test_formats_unknown_type_falls_back_to_string():
     tools = [_make_tool("x", params=params)]
     result = to_anthropic_tools(tools)
     assert result[0]["input_schema"]["properties"]["x"]["type"] == "string"
+
+
+# ── Gemini / Vertex AI ───────────────────────
+
+def test_gemini_tools_shape():
+    params = [
+        ToolParameter(name="id", type="integer", required=True, location="path"),
+        ToolParameter(name="q", type="string", required=False, location="query", description="search"),
+    ]
+    tools = [_make_tool("getUser", params=params)]
+    result = to_gemini_tools(tools)
+    assert len(result) == 1
+    decls = result[0]["function_declarations"]
+    assert len(decls) == 1
+    decl = decls[0]
+    assert decl["name"] == "getUser"
+    assert decl["parameters"]["properties"]["id"]["type"] == "integer"
+    assert decl["parameters"]["required"] == ["id"]
+    assert decl["parameters"]["properties"]["q"]["description"] == "search"
+
+
+def test_vertex_ai_is_gemini_alias():
+    assert to_vertex_ai_tools is to_gemini_tools
+
+
+# ── Bedrock ──────────────────────────────────
+
+def test_bedrock_tools_shape():
+    params = [ToolParameter(name="id", type="string", required=True)]
+    tools = [_make_tool("getItem", params=params)]
+    result = to_bedrock_tools(tools)
+    assert len(result) == 1
+    spec = result[0]["toolSpec"]
+    assert spec["name"] == "getItem"
+    assert spec["inputSchema"]["json"]["type"] == "object"
+    assert spec["inputSchema"]["json"]["properties"]["id"]["type"] == "string"
+    assert spec["inputSchema"]["json"]["required"] == ["id"]
+
+
+# ── LangChain ────────────────────────────────
+
+def test_langchain_tools_shape():
+    params = [
+        ToolParameter(name="query", type="string", required=True, description="Search query"),
+    ]
+    tools = [_make_tool("search", params=params)]
+    result = to_langchain_tools(tools)
+    assert len(result) == 1
+    fn = result[0]
+    assert fn["type"] == "function"
+    assert fn["function"]["name"] == "search"
+    schema = fn["function"]["parameters"]
+    assert schema["title"] == "search"
+    assert schema["properties"]["query"]["type"] == "string"
+    assert schema["required"] == ["query"]
