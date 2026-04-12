@@ -131,8 +131,18 @@ def to_tools(
     # Deduplicate tool names
     tools = _deduplicate_names(tools)
 
-    # Store auth in tool metadata so execute() can use it later
-    if auth:
+    # Store auth in tool metadata so execute() can use it later.
+    # If swagger discovery found a JWT token, prefer bearer auth for execution.
+    if detection.discovered_token:
+        bearer = AuthConfig(
+            type="bearer",
+            token=detection.discovered_token,
+            verify_ssl=auth.verify_ssl if auth else True,
+        )
+        auth_dict = asdict(bearer)
+        for t in tools:
+            t.metadata["auth"] = auth_dict
+    elif auth:
         auth_dict = asdict(auth)
         for t in tools:
             t.metadata["auth"] = auth_dict

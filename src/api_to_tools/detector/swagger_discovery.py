@@ -522,6 +522,8 @@ def discover_swagger_with_auth(
                     result = fut.result()
                     if result:
                         _cancel_remaining(futures)
+                        # Attach the discovered token so execute() can reuse it
+                        result.discovered_token = token
                         return result
                 except Exception:
                     continue

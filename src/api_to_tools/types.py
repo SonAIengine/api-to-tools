@@ -45,6 +45,7 @@ class DetectionResult:
     spec_url: str
     raw_content: str | None = None
     content_type: str | None = None
+    discovered_token: str | None = None
 
 
 AuthType = Literal["basic", "bearer", "api_key", "cookie", "oauth2_client", "custom"]
