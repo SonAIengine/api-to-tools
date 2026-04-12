@@ -38,6 +38,18 @@ class Tool:
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def execute(self, args: dict | None = None, *, auth: "AuthConfig | None" = None) -> "ExecutionResult":
+        """Execute this tool with the given arguments.
+
+        Equivalent to `api_to_tools.execute(self, args, auth=auth)`.
+
+        Example:
+            tools = discover("https://api.example.com/docs")
+            result = tools[0].execute({"id": 1})
+        """
+        from api_to_tools.core import execute as _execute
+        return _execute(self, args or {}, auth=auth)
+
 
 @dataclass
 class DetectionResult:

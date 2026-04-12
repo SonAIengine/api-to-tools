@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from api_to_tools.core import discover
+from api_to_tools.core import discover, execute
 from api_to_tools.types import AuthConfig
 from api_to_tools.adapters.formats import to_function_calling, to_anthropic_tools
 from api_to_tools.utils import summarize, search_tools
@@ -145,6 +145,54 @@ def cmd_info(args):
         print(f"  ... and {len(tags) - 20} more tags")
 
 
+def cmd_execute(args):
+    """Execute a specific tool by name from a discovered API."""
+    auth = _build_auth(args)
+    print(f"Discovering API at {args.url}...", file=sys.stderr)
+    tools = discover(args.url, auth=auth, **_discover_kwargs(args))
+    print(f"Found {len(tools)} tools.", file=sys.stderr)
+
+    # Find tool by exact name or partial match
+    matches = [t for t in tools if t.name == args.tool]
+    if not matches:
+        matches = [t for t in tools if args.tool.lower() in t.name.lower()]
+
+    if not matches:
+        print(f"Error: no tool matching '{args.tool}' found.", file=sys.stderr)
+        print(f"Hint: try 'api-to-tools list {args.url}' to see available tools.", file=sys.stderr)
+        sys.exit(1)
+
+    if len(matches) > 1 and matches[0].name != args.tool:
+        print(f"Multiple matches for '{args.tool}':", file=sys.stderr)
+        for t in matches[:10]:
+            print(f"  - {t.method} {t.name}", file=sys.stderr)
+        print("Use exact name to pick one.", file=sys.stderr)
+        sys.exit(1)
+
+    tool = matches[0]
+    print(f"Executing: {tool.method} {tool.name}", file=sys.stderr)
+
+    # Parse args from JSON string or individual --arg key=value
+    tool_args = {}
+    if args.args:
+        try:
+            tool_args = json.loads(args.args)
+        except json.JSONDecodeError as e:
+            print(f"Error: --args must be valid JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    result = execute(tool, tool_args, auth=auth)
+    print(f"Status: {result.status}", file=sys.stderr)
+
+    # Output: JSON on stdout, status on stderr
+    if isinstance(result.data, (dict, list)):
+        print(json.dumps(result.data, indent=2, ensure_ascii=False, default=str))
+    else:
+        print(result.data)
+
+    sys.exit(0 if 200 <= result.status < 400 else 1)
+
+
 def cmd_export(args):
     auth = _build_auth(args)
     tools = discover(args.url, auth=auth, **_discover_kwargs(args))
@@ -191,6 +239,13 @@ def main():
     p_info.add_argument("url")
     _add_auth_args(p_info)
 
+    # execute
+    p_exec = sub.add_parser("execute", help="Execute a specific tool (discover → call)")
+    p_exec.add_argument("url", help="API URL")
+    p_exec.add_argument("tool", help="Tool name (exact or partial match)")
+    p_exec.add_argument("--args", default="{}", help="JSON string of tool arguments (default: {})")
+    _add_auth_args(p_exec)
+
     # export
     p_export = sub.add_parser("export", help="Export tool definitions")
     p_export.add_argument("url")
@@ -205,7 +260,13 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    cmd_map = {"serve": cmd_serve, "list": cmd_list, "info": cmd_info, "export": cmd_export}
+    cmd_map = {
+        "serve": cmd_serve,
+        "list": cmd_list,
+        "info": cmd_info,
+        "export": cmd_export,
+        "execute": cmd_execute,
+    }
     cmd_map[args.command](args)
 
 

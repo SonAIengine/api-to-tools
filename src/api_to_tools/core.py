@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import asdict
 from typing import Any
 from urllib.parse import urlparse
 
+from api_to_tools._logging import get_logger
 from api_to_tools.constants import DEFAULT_EXECUTOR_RPS
 from api_to_tools.detector import detect
 from api_to_tools.executors import get_executor
 from api_to_tools.parsers import get_parser
 from api_to_tools.rate_limiter import get_domain_limiter
 from api_to_tools.types import AuthConfig, DetectionResult, ExecutionResult, Tool
+
+log = get_logger("core")
 
 
 # Kwargs recognized by each layer, grouped for clean filtering.
@@ -103,11 +107,20 @@ def discover(
         cache = get_discover_cache()
         cached = cache.get(url)
         if cached is not None:
+            log.info("discover(%s) → %d tools (cache hit)", url, len(cached))
             return _apply_filters(list(cached), kwargs)
+
+    start = time.monotonic()
+    log.info("discover(%s): detecting spec type...", url)
 
     detect_kw, remaining = _split_kwargs(kwargs, _DETECT_KEYS)
     detection = detect(url, auth=auth, **detect_kw)
+
+    log.info("discover(%s): detected %s, parsing tools...", url, detection.type)
     tools = to_tools(detection, auth=auth, **remaining)
+
+    elapsed = time.monotonic() - start
+    log.info("discover(%s): %d tools in %.1fs", url, len(tools), elapsed)
 
     # Store in cache (before filters, so different filter combos still benefit)
     if cache_ttl is not None:
