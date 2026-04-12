@@ -55,3 +55,4 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = ["integration: tests that make real network requests"]

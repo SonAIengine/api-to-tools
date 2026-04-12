@@ -1,0 +1,51 @@
+site_name: api-to-tools
+site_description: Universal API-to-LLM-tools converter
+site_url: https://sonaiengine.github.io/api-to-tools/
+repo_url: https://github.com/SonAIengine/api-to-tools
+repo_name: SonAIengine/api-to-tools
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Guide:
+    - Discovery: guide/discovery.md
+    - Authentication: guide/authentication.md
+    - Execution: guide/execution.md
+    - LLM Integration: guide/llm-integration.md
+    - Traffic Capture: guide/traffic-capture.md
+    - SDK Generation: guide/sdk-generation.md
+    - Testing: guide/testing.md
+  - API Reference:
+    - Core: api/core.md
+    - Types: api/types.md
+    - Parsers: api/parsers.md
+    - Adapters: api/adapters.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - admonition
+  - toc:
+      permalink: true
